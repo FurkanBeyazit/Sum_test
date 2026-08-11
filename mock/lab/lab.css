@@ -1,0 +1,86 @@
+/* Laboratuvar — kasıtlı olarak sade. Beyaz zemin, siyah yazı, süs yok.
+   Amaç: dikkatin tasarıma değil, çalışan mekanizmaya olması. */
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0; padding: 28px 22px 90px;
+  max-width: 940px; margin-inline: auto;
+  font: 15px/1.65 -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+  color: #111; background: #fff;
+}
+
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 16px; margin: 30px 0 8px; padding-top: 14px;
+     border-top: 1px solid #e2e2e2; }
+h3 { font-size: 14px; margin: 18px 0 6px; }
+p  { margin: 8px 0; }
+a  { color: #0b62c4; }
+
+.lead { color: #444; margin: 0 0 18px; }
+.crumb { font-size: 12px; color: #777; margin-bottom: 14px; }
+.crumb a { color: #0b62c4; text-decoration: none; }
+
+code, pre, .mono { font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; }
+code { background: #f1f1f1; padding: 1px 5px; border-radius: 3px; font-size: 13px; }
+pre  { background: #fafafa; border: 1px solid #e2e2e2; border-radius: 5px;
+       padding: 12px 14px; overflow-x: auto; font-size: 12.5px; line-height: 1.55; }
+
+.box { border: 1px solid #d8d8d8; border-radius: 6px; padding: 14px;
+       margin: 14px 0; background: #fff; }
+.note { background: #fffbe8; border: 1px solid #f0dfa0; border-radius: 5px;
+        padding: 10px 13px; margin: 12px 0; font-size: 14px; }
+.warn { background: #fdeeee; border-color: #f0b8b8; }
+.ok   { background: #eef8ee; border-color: #b8dcb8; }
+
+button { font: inherit; padding: 5px 12px; border: 1px solid #bbb;
+         border-radius: 4px; background: #f6f6f6; cursor: pointer; }
+button:hover { background: #ececec; }
+button:active { transform: translateY(1px); }
+button.on { background: #0b62c4; color: #fff; border-color: #0b62c4; }
+
+input[type=range] { width: 220px; vertical-align: middle; }
+input[type=number], input[type=text], select {
+  font: inherit; padding: 3px 6px; border: 1px solid #bbb; border-radius: 4px;
+}
+label { font-size: 13px; }
+
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+       margin: 8px 0; }
+
+/* video + canvas yığını — laboratuvarın kalbi */
+.stack { position: relative; display: inline-block; line-height: 0;
+         border: 2px solid #333; background: #000; }
+.stack video { display: block; }
+.stack canvas { position: absolute; left: 0; top: 0; }
+
+table { border-collapse: collapse; font-size: 13px; margin: 10px 0; width: 100%; }
+th, td { border: 1px solid #ddd; padding: 5px 9px; text-align: left; }
+th { background: #f4f4f4; font-weight: 600; }
+
+.out { background: #111; color: #d6f5c9; padding: 10px 12px; border-radius: 5px;
+       font-family: ui-monospace, Consolas, monospace; font-size: 12.5px;
+       white-space: pre-wrap; min-height: 22px; max-height: 240px;
+       overflow-y: auto; }
+
+.lessons { list-style: none; padding: 0; }
+.lessons li { border: 1px solid #e0e0e0; border-radius: 6px; padding: 11px 14px;
+              margin-bottom: 8px; }
+.lessons li:hover { background: #fafafa; }
+.lessons a { font-weight: 600; text-decoration: none; font-size: 15px; }
+.lessons .d { color: #555; font-size: 13.5px; margin-top: 3px; }
+.lessons .n { color: #999; font-family: ui-monospace, monospace;
+              margin-right: 7px; }
+
+.nav { display: flex; justify-content: space-between; margin-top: 34px;
+       padding-top: 14px; border-top: 1px solid #e2e2e2; font-size: 14px; }
+
+.kbd { border: 1px solid #ccc; border-bottom-width: 2px; border-radius: 3px;
+       padding: 1px 5px; font-size: 12px; background: #f8f8f8;
+       font-family: ui-monospace, monospace; }
+
+.try { background: #f4f8fc; border: 1px solid #cfe0f0; border-radius: 5px;
+       padding: 11px 14px; margin: 14px 0; }
+.try h3 { margin-top: 0; }
+.try ol { margin: 6px 0 0 18px; padding: 0; }
+.try li { margin: 5px 0; font-size: 14px; }

@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="tr">
+<head><meta charset="utf-8"><link rel="stylesheet" href="lab.css"></head>
+<body>
+
+<p>
+  Kullanıcı videodaki bir kişiye tıkladı. Hangi kutuya denk geldi? Canvas
+  DOM elementi değildir — <code>onclick</code> yok. Koordinatı kendin test
+  edersin. Basit ama iki tuzağı var.
+</p>
+
+<div class="box">
+  <!--LAB:START-->
+  <div class="row">
+    <label><input type="radio" name="rule" value="first" > İlk eşleşen kazanır (naif)</label>
+    <label><input type="radio" name="rule" value="small" checked> En küçük alan kazanır (doğru)</label>
+  </div>
+
+  <div class="stack" style="width:660px">
+    <video id="v" src="/api/videos/CAM01/stream" muted loop
+           style="width:100%;display:block"></video>
+    <!-- DİKKAT: canvas'ın tıklanabilir olması için pointer-events gerekli.
+         Overlay genelde pointer-events:none olur ki altındaki video
+         kontrollerine tıklanabilsin. Burada tıklama İSTİYORUZ. -->
+    <canvas id="c" style="width:100%;height:100%;cursor:crosshair"></canvas>
+  </div>
+
+  <script>
+    const v = document.getElementById('v'), c = document.getElementById('c');
+    const cx = c.getContext('2d');
+    let DET = null, boxesNow = [], hover = null, picked = null;
+
+    function geom() {
+      const vw = v.videoWidth || 960, vh = v.videoHeight || 540;
+      const s = Math.min(c.width / vw, c.height / vh);
+      const dw = vw * s, dh = vh * s;
+      return { ox: (c.width - dw) / 2, oy: (c.height - dh) / 2, dw, dh };
+    }
+
+    function draw(t) {
+      c.width = c.clientWidth; c.height = c.clientHeight;
+      cx.clearRect(0, 0, c.width, c.height);
+      if (!DET) return;
+      const g = geom();
+      const f = Math.round(t * DET.fps);
+      const rows = DET.index.get(f) || DET.index.get(f - 1) || [];
+
+      /* --- Her karede EKRAN KOORDINATLARINI da sakla ------------------
+         Tıklama testi normalize değil, piksel uzayında yapılır. Her çizimde
+         listeyi tazelemek en basit ve en güvenilir yol. */
+      boxesNow = rows.map(([, tid, cls, conf, bx, by, bw, bh]) => ({
+        tid, cls, conf,
+        px: g.ox + bx * g.dw, py: g.oy + by * g.dh,
+        pw: bw * g.dw, ph: bh * g.dh,
+      }));
+
+      for (const b of boxesNow) {
+        const isHover = hover === b.tid, isPick = picked === b.tid;
+        cx.strokeStyle = isPick ? '#00c853' : (isHover ? '#ff9800' : '#e6194b');
+        cx.lineWidth = isPick ? 3 : (isHover ? 3 : 1.5);
+        cx.strokeRect(b.px, b.py, b.pw, b.ph);
+        if (isHover || isPick) {
+          cx.fillStyle = isPick ? 'rgba(0,200,83,.16)' : 'rgba(255,152,0,.14)';
+          cx.fillRect(b.px, b.py, b.pw, b.ph);
+        }
+        // Alanı yaz — "en küçük kazanır" kuralını gözle doğrulamak için
+        cx.fillStyle = 'rgba(0,0,0,.7)'; cx.font = '10px monospace';
+        cx.fillText(`#${b.tid} ${Math.round(b.pw * b.ph)}px²`, b.px + 2, b.py - 3);
+      }
+    }
+
+    /* --- TUZAK 1: fare koordinatı sayfa koordinatıdır ----------------
+       clientX/Y viewport'a göredir. Canvas'ın nerede olduğunu
+       getBoundingClientRect() ile çıkarman gerekir. Scroll varsa şart. */
+    function toCanvas(e) {
+      const r = c.getBoundingClientRect();
+      return [e.clientX - r.left, e.clientY - r.top];
+    }
+
+    /* --- TUZAK 2: iç içe kutularda hangisi? --------------------------
+       Bir araç kutusunun İÇİNDE duran bir kişi kutusu olabilir. "İlk
+       eşleşeni al" dersen hep araç seçilir ve kullanıcı kişiyi asla
+       tıklayamaz. Doğru kural: EN KÜÇÜK ALANLI kutu kazanır. */
+    function hitTest(x, y) {
+      const rule = document.querySelector('[name=rule]:checked').value;
+      let best = null, bestArea = Infinity;
+      for (const b of boxesNow) {
+        if (x < b.px || x > b.px + b.pw || y < b.py || y > b.py + b.ph) continue;
+        if (rule === 'first') return b;               // naif
+        const a = b.pw * b.ph;
+        if (a < bestArea) { bestArea = a; best = b; } // doğru
+      }
+      return best;
+    }
+
+    c.addEventListener('mousemove', e => {
+      const b = hitTest(...toCanvas(e));
+      hover = b ? b.tid : null;
+      c.style.cursor = b ? 'pointer' : 'crosshair';
+    });
+
+    c.addEventListener('click', e => {
+      const b = hitTest(...toCanvas(e));
+      if (!b) { log.set('boş alana tıklandı'); picked = null; return; }
+      picked = b.tid;
+      log.set(
+        `seçilen nesne\n` +
+        `  track_id  : ${b.tid}\n` +
+        `  sınıf     : ${b.cls === 0 ? 'person' : 'vehicle'}\n` +
+        `  güven     : ${(b.conf * 100).toFixed(1)}%\n` +
+        `  ekran kutu: x=${b.px.toFixed(0)} y=${b.py.toFixed(0)} ` +
+        `${b.pw.toFixed(0)}×${b.ph.toFixed(0)}\n` +
+        `  alan      : ${Math.round(b.pw * b.ph)} px²\n\n` +
+        `Gerçek uygulamada burada ne olur:\n` +
+        `  → nesne detay penceresi açılır (PAR öznitelikleri)\n` +
+        `  → "bu kişiyi takip et" ile Re-ID başlatılır\n` +
+        `  → /api/reid  { object_id: "CAM01-O${b.tid}" }`
+      );
+    });
+
+    if (v.requestVideoFrameCallback) {
+      const step = (n, m) => { draw(m.mediaTime); v.requestVideoFrameCallback(step); };
+      v.requestVideoFrameCallback(step);
+    }
+
+    (async () => {
+      const d = await (await fetch('/api/videos/CAM01/detections?from=0&to=180')).json();
+      const index = new Map();
+      for (const r of d.rows) {
+        const f = Math.round(r[0] * d.fps);
+        if (!index.has(f)) index.set(f, []);
+        index.get(f).push(r);
+      }
+      DET = { fps: d.fps, index };
+      v.currentTime = 130;   // aracın ve kişilerin birlikte olduğu an
+      v.play();
+    })();
+  </script>
+  <!--LAB:END-->
+</div>
+
+<div class="out" id="log">Videodaki bir kutuya tıkla.</div>
+
+<div class="note">
+  <b>Deney:</b> Video 130. saniyeden başlıyor — orada arka planda geniş bir
+  araç kutusu var. Üstteki radyo düğmesini "İlk eşleşen kazanır" yap ve
+  araçla kişinin üst üste geldiği yere tıkla. Yanlış nesne seçiliyor.
+</div>
+
+<h2>50+ kutu olursa?</h2>
+<table>
+  <tr><th>Yaklaşım</th><th>10 kutu</th><th>200 kutu</th><th>Not</th></tr>
+  <tr><td>Her kutu bir <code>&lt;div&gt;</code></td><td>çalışır</td>
+      <td>❌ layout kilitlenir</td><td>DOM güncellemesi pahalı</td></tr>
+  <tr><td>SVG <code>&lt;rect&gt;</code></td><td>çalışır</td>
+      <td>⚠️ yavaşlar</td><td>Yine DOM</td></tr>
+  <tr><td>Canvas + koordinat testi</td><td>çalışır</td>
+      <td>✅ akıcı</td><td>Projede bu kullanıldı</td></tr>
+</table>
+<p>
+  Canvas'ta 200 kutu için hit test 200 karşılaştırma demek — mikrosaniyeler.
+  DOM'da 200 element ise her karede reflow riski.
+</p>
+
+<div class="try">
+  <h3>Dene</h3>
+  <ol>
+    <li>Sayfayı aşağı kaydırıp öyle tıkla. <code>getBoundingClientRect()</code>
+        olmasaydı ne olurdu? (Kodda <code>- r.left</code> ve
+        <code>- r.top</code>'u sil, dene.)</li>
+    <li><code>hitTest</code>'e ±4 piksel tolerans ekle
+        (<code>x &lt; b.px - 4</code>). İnce kutuları tıklamak kolaylaşıyor mu?</li>
+    <li>Canvas'a <code>pointer-events: none</code> ver. Tıklama artık
+        çalışmaz — overlay'ler genelde böyledir, biz kasıtlı açtık.</li>
+    <li>Video duraklatılmışken tıkla. <code>boxesNow</code> son çizimden
+        kaldığı için hâlâ çalışıyor. Neden bu iyi bir tasarım?</li>
+  </ol>
+</div>
+
+<h2>Kod</h2>
+<pre id="src"></pre>
+
+<script src="lab.js"></script>
+<script>
+  header('Kutuya tıklamak',
+    'Canvas DOM değil. Tıklamayı sen çözersin — ve iç içe kutularda doğru olanı seçmen gerekir.');
+  const log = makeLog('#log');
+</script>
+</body>
+</html>

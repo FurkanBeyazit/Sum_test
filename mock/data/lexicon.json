@@ -1,0 +1,360 @@
+{
+ "concepts": [
+  "person",
+  "vehicle",
+  "crowd",
+  "walk",
+  "run",
+  "stand",
+  "phone",
+  "board_vehicle",
+  "enter",
+  "exit",
+  "loiter",
+  "fall",
+  "fight",
+  "fire_smoke",
+  "night",
+  "bag",
+  "bicycle",
+  "abandon"
+ ],
+ "lexicon": {
+  "사람": {
+   "person": 1.0
+  },
+  "인물": {
+   "person": 1.0
+  },
+  "남성": {
+   "person": 1.0
+  },
+  "여성": {
+   "person": 1.0
+  },
+  "person": {
+   "person": 1.0
+  },
+  "man": {
+   "person": 1.0
+  },
+  "woman": {
+   "person": 1.0
+  },
+  "insan": {
+   "person": 1.0
+  },
+  "adam": {
+   "person": 1.0
+  },
+  "kişi": {
+   "person": 1.0
+  },
+  "차량": {
+   "vehicle": 1.0
+  },
+  "자동차": {
+   "vehicle": 1.0
+  },
+  "차": {
+   "vehicle": 0.8
+  },
+  "car": {
+   "vehicle": 1.0
+  },
+  "vehicle": {
+   "vehicle": 1.0
+  },
+  "araç": {
+   "vehicle": 1.0
+  },
+  "arac": {
+   "vehicle": 1.0
+  },
+  "araba": {
+   "vehicle": 1.0
+  },
+  "세단": {
+   "vehicle": 0.9
+  },
+  "트럭": {
+   "vehicle": 0.9
+  },
+  "걷": {
+   "walk": 1.0
+  },
+  "보행": {
+   "walk": 1.0
+  },
+  "walk": {
+   "walk": 1.0
+  },
+  "yürü": {
+   "walk": 1.0
+  },
+  "뛰": {
+   "run": 1.0
+  },
+  "달리": {
+   "run": 1.0
+  },
+  "run": {
+   "run": 1.0
+  },
+  "koş": {
+   "run": 1.0
+  },
+  "서있": {
+   "stand": 1.0
+  },
+  "정지": {
+   "stand": 0.8
+  },
+  "dur": {
+   "stand": 0.7
+  },
+  "통화": {
+   "phone": 1.0,
+   "stand": 0.4
+  },
+  "전화": {
+   "phone": 1.0
+  },
+  "phone": {
+   "phone": 1.0
+  },
+  "telefon": {
+   "phone": 1.0
+  },
+  "탑승": {
+   "board_vehicle": 1.0,
+   "vehicle": 0.6
+  },
+  "승차": {
+   "board_vehicle": 1.0,
+   "vehicle": 0.6
+  },
+  "binme": {
+   "board_vehicle": 1.0
+  },
+  "boarding": {
+   "board_vehicle": 1.0
+  },
+  "binen": {
+   "board_vehicle": 1.0
+  },
+  "bindi": {
+   "board_vehicle": 1.0
+  },
+  "biniyor": {
+   "board_vehicle": 1.0
+  },
+  "binerek": {
+   "board_vehicle": 1.0
+  },
+  "진입": {
+   "enter": 1.0
+  },
+  "들어": {
+   "enter": 0.9
+  },
+  "출입": {
+   "enter": 0.9
+  },
+  "enter": {
+   "enter": 1.0
+  },
+  "giriş": {
+   "enter": 1.0
+  },
+  "giren": {
+   "enter": 1.0
+  },
+  "빠져나": {
+   "exit": 1.0
+  },
+  "나가": {
+   "exit": 0.9
+  },
+  "exit": {
+   "exit": 1.0
+  },
+  "çıkış": {
+   "exit": 1.0
+  },
+  "çık": {
+   "exit": 0.9
+  },
+  "ayrıl": {
+   "exit": 0.9
+  },
+  "bekle": {
+   "stand": 0.9,
+   "loiter": 0.5
+  },
+  "duran": {
+   "stand": 0.9
+  },
+  "taşı": {
+   "bag": 0.8
+  },
+  "park": {
+   "vehicle": 0.9,
+   "stand": 0.5
+  },
+  "주차": {
+   "vehicle": 0.9,
+   "stand": 0.5
+  },
+  "배회": {
+   "loiter": 1.0
+  },
+  "서성": {
+   "loiter": 1.0
+  },
+  "loiter": {
+   "loiter": 1.0
+  },
+  "başıboş": {
+   "loiter": 1.0
+  },
+  "dolaş": {
+   "loiter": 0.9
+  },
+  "쓰러": {
+   "fall": 1.0
+  },
+  "넘어": {
+   "fall": 1.0
+  },
+  "fall": {
+   "fall": 1.0
+  },
+  "düş": {
+   "fall": 1.0
+  },
+  "yere": {
+   "fall": 0.6
+  },
+  "싸움": {
+   "fight": 1.0
+  },
+  "폭행": {
+   "fight": 1.0
+  },
+  "fight": {
+   "fight": 1.0
+  },
+  "kavga": {
+   "fight": 1.0
+  },
+  "화재": {
+   "fire_smoke": 1.0
+  },
+  "불": {
+   "fire_smoke": 0.8
+  },
+  "연기": {
+   "fire_smoke": 1.0
+  },
+  "fire": {
+   "fire_smoke": 1.0
+  },
+  "smoke": {
+   "fire_smoke": 1.0
+  },
+  "yangın": {
+   "fire_smoke": 1.0
+  },
+  "duman": {
+   "fire_smoke": 1.0
+  },
+  "군중": {
+   "crowd": 1.0
+  },
+  "밀집": {
+   "crowd": 1.0
+  },
+  "crowd": {
+   "crowd": 1.0
+  },
+  "kalabalık": {
+   "crowd": 1.0
+  },
+  "가방": {
+   "bag": 1.0
+  },
+  "백팩": {
+   "bag": 1.0
+  },
+  "bag": {
+   "bag": 1.0
+  },
+  "çanta": {
+   "bag": 1.0
+  },
+  "방치": {
+   "abandon": 1.0,
+   "bag": 0.5
+  },
+  "유기": {
+   "abandon": 1.0
+  },
+  "abandoned": {
+   "abandon": 1.0
+  },
+  "terk": {
+   "abandon": 1.0
+  },
+  "자전거": {
+   "bicycle": 1.0
+  },
+  "bicycle": {
+   "bicycle": 1.0
+  },
+  "bisiklet": {
+   "bicycle": 1.0
+  },
+  "야간": {
+   "night": 1.0
+  },
+  "밤": {
+   "night": 1.0
+  },
+  "night": {
+   "night": 1.0
+  },
+  "gece": {
+   "night": 1.0
+  }
+ },
+ "colors": {
+  "빨간": "red",
+  "빨강": "red",
+  "붉은": "red",
+  "red": "red",
+  "kırmızı": "red",
+  "흰": "white",
+  "흰색": "white",
+  "하얀": "white",
+  "white": "white",
+  "beyaz": "white",
+  "검은": "black",
+  "검정": "black",
+  "black": "black",
+  "siyah": "black",
+  "파란": "blue",
+  "파랑": "blue",
+  "blue": "blue",
+  "mavi": "blue",
+  "회색": "gray",
+  "gray": "gray",
+  "gri": "gray",
+  "노란": "yellow",
+  "yellow": "yellow",
+  "sarı": "yellow",
+  "초록": "green",
+  "green": "green",
+  "yeşil": "green"
+ }
+}

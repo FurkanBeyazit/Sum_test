@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="tr">
+<head><meta charset="utf-8"><link rel="stylesheet" href="lab.css"></head>
+<body>
+
+<div class="box">
+  <!--LAB:START-->
+  <!-- Tarayıcıda video oynatmak için gereken HER ŞEY bu tek etiket.
+       controls yok — kontrolleri kendimiz yazacağız, çünkü gerçek projede
+       özel bir kontrol çubuğu var (ekran görüntüsündeki gibi). -->
+  <div class="stack">
+    <video id="v" src="/api/videos/CAM01/stream" width="640" preload="metadata"></video>
+  </div>
+
+  <div class="row">
+    <button id="play">▶ Oynat</button>
+    <button id="back">⟲ 10 sn</button>
+    <button id="fwd">10 sn ⟳</button>
+    <label>Hız
+      <select id="rate">
+        <option>0.25</option><option>0.5</option>
+        <option selected>1</option><option>2</option><option>4</option>
+      </select>
+    </label>
+    <span class="mono" id="clock">0.00 / ?</span>
+  </div>
+
+  <script>
+    const v = document.getElementById('v');
+    const clock = document.getElementById('clock');
+
+    // 1) Oynat / duraklat. video.paused durumu okunur, play()/pause() çağrılır.
+    document.getElementById('play').onclick = () => {
+      v.paused ? v.play() : v.pause();
+    };
+    v.onplay  = () => document.getElementById('play').textContent = '❚❚ Duraklat';
+    v.onpause = () => document.getElementById('play').textContent = '▶ Oynat';
+
+    // 2) Konum değiştirmek: currentTime'a yazmak yeterli. Saniye cinsinden,
+    //    ondalıklı olabilir. Sınırı aşarsan tarayıcı kırpar ama biz de kırpalım.
+    document.getElementById('back').onclick = () => v.currentTime = Math.max(0, v.currentTime - 10);
+    document.getElementById('fwd').onclick  = () => v.currentTime = Math.min(v.duration - 0.05, v.currentTime + 10);
+
+    // 3) Oynatma hızı. Ses de hızlanır; bizde ses yok.
+    document.getElementById('rate').onchange = e => v.playbackRate = +e.target.value;
+
+    // 4) Zaman göstergesi. DİKKAT: timeupdate saniyede sadece ~4 kez tetiklenir.
+    //    Bu bir saat için yeterli, ama BBox çizmek için DEĞİL (ders 05).
+    v.ontimeupdate = () => {
+      clock.textContent = v.currentTime.toFixed(2) + ' / ' + v.duration.toFixed(2);
+    };
+
+    // 5) Metadata yüklendiğinde çözünürlük ve süre bilinir hale gelir.
+    //    Bu olaydan ÖNCE v.duration = NaN, v.videoWidth = 0'dır.
+    v.onloadedmetadata = () => {
+      log.set(
+        'videoWidth  : ' + v.videoWidth + '\n' +
+        'videoHeight : ' + v.videoHeight + '\n' +
+        'duration    : ' + v.duration + ' sn\n' +
+        'en/boy oranı: ' + (v.videoWidth / v.videoHeight).toFixed(4)
+      );
+    };
+  </script>
+  <!--LAB:END-->
+</div>
+
+<h2>Ne oldu?</h2>
+<div class="out" id="log">metadata bekleniyor…</div>
+
+<h2>Kodek: hangi video tarayıcıda oynar?</h2>
+<p>
+  Tarayıcı her kodeği oynatamaz. VMS'ten inen kayıt büyük ihtimalle
+  <b>H.265/HEVC</b> olacak — ve Chrome'da HEVC desteği donanıma bağlıdır,
+  garanti değildir. Aşağıdaki tablo <b>senin</b> tarayıcının ne dediğini
+  gösteriyor:
+</p>
+<table id="codecs"></table>
+<div class="note warn">
+  <b>Sonuç:</b> Backend, oynatma için ayrı bir <b>proxy</b> üretmeli:
+  <code>H.264 (main profile) + yuv420p</code>. Bu projede
+  <code>tools/add_video.py</code> tam olarak bunu yapıyor.
+  <code>probably</code> = kesin oynar, <code>maybe</code> = deneyebilir,
+  boş = oynatamaz.
+</div>
+
+<div class="try">
+  <h3>Dene</h3>
+  <ol>
+    <li><code>preload="metadata"</code> yerine <code>preload="none"</code> yaz.
+        Süre göstergesi artık ne zaman doluyor?</li>
+    <li><code>v.currentTime = 175</code> yaz konsola — videonun sonuna atlar.
+        Sonra <code>v.currentTime = 300</code> dene (süre 180 sn). Ne olur?</li>
+    <li><code>playbackRate</code>'i 4 yap ve <code>timeupdate</code>
+        sayacını izle. Saniyede kaç kez güncelleniyor? (Cevap: hız fark
+        etmez, ~4.)</li>
+    <li><code>&lt;video&gt;</code> etiketine <code>controls</code> ekle.
+        Tarayıcının kendi kontrolleri çıkar — neden bunları kullanmıyoruz?
+        (İpucu: ekran görüntüsündeki 원본 영상 보기 butonu.)</li>
+  </ol>
+</div>
+
+<h2>Kod</h2>
+<pre id="src"></pre>
+
+<script src="lab.js"></script>
+<script>
+  header('Video oynatmanın temeli',
+    'Tarayıcıda video oynatmak tek bir etiket. Asıl mesele kontrolü ele almak ve kodeğin ne olduğunu bilmek.');
+  const log = makeLog('#log');
+
+  // Kodek desteği testi — canPlayType() tarayıcının kendi cevabı
+  const tests = [
+    ['H.264 (baseline)', 'video/mp4; codecs="avc1.42E01E"'],
+    ['H.264 (main)',     'video/mp4; codecs="avc1.4D401E"'],
+    ['H.264 (high)',     'video/mp4; codecs="avc1.640028"'],
+    ['H.265 / HEVC',     'video/mp4; codecs="hvc1.1.6.L93.B0"'],
+    ['VP9',              'video/webm; codecs="vp09.00.10.08"'],
+    ['AV1',              'video/mp4; codecs="av01.0.05M.08"'],
+    ['AAC ses',          'audio/mp4; codecs="mp4a.40.2"'],
+  ];
+  const t = document.getElementById('codecs');
+  t.innerHTML = '<tr><th>Kodek</th><th>canPlayType()</th><th>Sonuç</th></tr>';
+  const probe = document.createElement('video');
+  for (const [name, mime] of tests) {
+    const r = probe.canPlayType(mime);
+    const ok = r === 'probably' ? '✅ oynar'
+      : r === 'maybe' ? '⚠️ belki' : '❌ oynamaz';
+    t.innerHTML += `<tr><td>${name}</td><td class="mono">${r || '(boş)'}</td><td>${ok}</td></tr>`;
+  }
+</script>
+</body>
+</html>

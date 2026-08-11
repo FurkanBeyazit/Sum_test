@@ -1,0 +1,118 @@
+{
+ "logs": [
+  {
+   "ts": "2025-05-20T22:30:00+09:00",
+   "level": "INFO",
+   "component": "engine",
+   "message": "요약 엔진 시작 (vsum-engine 0.4.2)"
+  },
+  {
+   "ts": "2025-05-20T22:30:17+09:00",
+   "level": "INFO",
+   "component": "gpu",
+   "message": "CUDA device 0: NVIDIA GeForce RTX 5070 (12288 MiB)"
+  },
+  {
+   "ts": "2025-05-20T22:30:34+09:00",
+   "level": "INFO",
+   "component": "model",
+   "message": "YOLOv11-x 로드 완료 (1.8s)"
+  },
+  {
+   "ts": "2025-05-20T22:30:51+09:00",
+   "level": "INFO",
+   "component": "model",
+   "message": "BoT-SORT 초기화"
+  },
+  {
+   "ts": "2025-05-20T22:31:08+09:00",
+   "level": "INFO",
+   "component": "model",
+   "message": "PAR-Swin-B 로드 완료 (2.1s)"
+  },
+  {
+   "ts": "2025-05-20T22:31:25+09:00",
+   "level": "INFO",
+   "component": "model",
+   "message": "SOLIDER swin_base 로드 완료 (3.4s) — 임베딩 차원 1024"
+  },
+  {
+   "ts": "2025-05-20T22:31:42+09:00",
+   "level": "INFO",
+   "component": "job",
+   "message": "job#8841 시작 — CAM01 (180.0s, 10fps)"
+  },
+  {
+   "ts": "2025-05-20T22:31:59+09:00",
+   "level": "INFO",
+   "component": "stage",
+   "message": "[1/5] 디코딩 및 프레임 추출"
+  },
+  {
+   "ts": "2025-05-20T22:32:16+09:00",
+   "level": "INFO",
+   "component": "stage",
+   "message": "[2/5] Object Detection + Tracking"
+  },
+  {
+   "ts": "2025-05-20T22:32:33+09:00",
+   "level": "WARN",
+   "component": "detect",
+   "message": "CAM01 t=71.2s — 낮은 신뢰도 검출 3건 폐기 (conf<0.35)"
+  },
+  {
+   "ts": "2025-05-20T22:32:50+09:00",
+   "level": "INFO",
+   "component": "stage",
+   "message": "[3/5] PAR 속성 추출 (4 tracks)"
+  },
+  {
+   "ts": "2025-05-20T22:33:07+09:00",
+   "level": "INFO",
+   "component": "stage",
+   "message": "[4/5] Re-ID 임베딩 추출 (SOLIDER)"
+  },
+  {
+   "ts": "2025-05-20T22:33:24+09:00",
+   "level": "INFO",
+   "component": "stage",
+   "message": "[5/5] 이벤트 후보 구간 선정 (90 windows → 12 candidates)"
+  },
+  {
+   "ts": "2025-05-20T22:33:41+09:00",
+   "level": "INFO",
+   "component": "job",
+   "message": "job#8841 완료 — 소요 42.6s"
+  },
+  {
+   "ts": "2025-05-20T22:33:58+09:00",
+   "level": "INFO",
+   "component": "job",
+   "message": "job#8842 시작 — CAM02"
+  },
+  {
+   "ts": "2025-05-20T22:34:15+09:00",
+   "level": "ERROR",
+   "component": "job",
+   "message": "job#8850 실패 — CAM09: CUDA out of memory (요구 11.4GB / 가용 8.0GB)"
+  },
+  {
+   "ts": "2025-05-20T22:34:32+09:00",
+   "level": "WARN",
+   "component": "vms",
+   "message": "Athena VMS 연결 지연 (1420ms) — node 23002"
+  },
+  {
+   "ts": "2025-05-20T22:34:49+09:00",
+   "level": "INFO",
+   "component": "vlm",
+   "message": "InternVL2-8B 추론 30 세그먼트 — 평균 1.8s/세그먼트"
+  },
+  {
+   "ts": "2025-05-20T22:35:06+09:00",
+   "level": "INFO",
+   "component": "api",
+   "message": "GET /api/videos/CAM01/detections?from=0&to=30 → 200 (18ms)"
+  }
+ ]
+}

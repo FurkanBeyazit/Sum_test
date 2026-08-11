@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="tr">
+<head><meta charset="utf-8"><link rel="stylesheet" href="lab.css"></head>
+<body>
+
+<p>
+  Bu projede <b>üç ayrı zaman ekseni</b> var. Karıştırmak, projedeki
+  hataların en verimli kaynağıdır.
+</p>
+<table>
+  <tr><th>Eksen</th><th>Örnek</th><th>Nerede kullanılır</th><th>DB alanı</th></tr>
+  <tr><td><b>Medya zamanı</b></td><td><code>72.4</code> sn</td>
+      <td><code>video.currentTime</code>, bbox satırları</td>
+      <td><code>frame_index.timestamp_ms</code></td></tr>
+  <tr><td><b>Duvar saati</b></td><td><code>2025-05-20 08:31:12</code></td>
+      <td>kullanıcıya gösterilen HER ŞEY</td>
+      <td><code>frame_index.captured_at</code></td></tr>
+  <tr><td><b>Özet video zamanı</b></td><td><code>12.4</code> sn</td>
+      <td>özet oynatılırken</td>
+      <td>segment eşleme tablosu</td></tr>
+</table>
+
+<div class="box">
+  <!--LAB:START-->
+  <div class="row">
+    <button id="play">▶</button>
+    <button data-t="0">başa</button>
+    <button data-t="72">72 sn</button>
+    <button data-t="150">150 sn</button>
+  </div>
+
+  <div class="stack" style="width:520px">
+    <video id="v" src="/api/videos/CAM01/stream" muted loop
+           style="width:100%;display:block"></video>
+  </div>
+
+  <script>
+    const v = document.getElementById('v');
+    document.getElementById('play').onclick = () => v.paused ? v.play() : v.pause();
+    document.querySelectorAll('[data-t]').forEach(b =>
+      b.onclick = () => v.currentTime = +b.dataset.t);
+
+    /* ====================================================================
+       TimeMapper — bu dönüşümün TEK yeri burası olmalı.
+       Projede: core.js → class TimeMapper
+       ==================================================================== */
+    class TimeMapper {
+      constructor(startIso, segments = []) {
+        this.startIso = startIso;
+        this.startMs = Date.parse(startIso);   // videonun gerçek başlangıcı
+        this.segments = segments;              // özet → orijinal eşlemesi
+      }
+
+      // medya zamanı (sn) → gerçek tarih
+      toWall(sec) { return new Date(this.startMs + sec * 1000); }
+
+      // medya zamanı → "08:31:12"
+      wallClock(sec) {
+        const d = this.toWall(sec), p = n => String(n).padStart(2, '0');
+        return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+      }
+
+      // duvar saati → medya zamanı  (olay listesinden seek için ters yön)
+      toMedia(when) {
+        const ms = typeof when === 'string' ? Date.parse(when) : +when;
+        return (ms - this.startMs) / 1000;
+      }
+
+      // özet video zamanı → hangi orijinal videonun hangi anı
+      summaryToSource(sumSec) {
+        for (const s of this.segments) {
+          if (sumSec >= s.sum_start && sumSec <= s.sum_end)
+            return { videoId: s.src_video_id,
+                     srcTime: s.src_start + (sumSec - s.sum_start),
+                     eventId: s.event_id };
+        }
+        return null;
+      }
+    }
+
+    let TM = null, SEG = [];
+
+    (async () => {
+      const meta = await (await fetch('/api/videos/CAM01')).json();
+      const sum  = await (await fetch('/api/videos/CAM01/summary')).json();
+      SEG = sum.segments;
+      TM = new TimeMapper(meta.start_time, SEG);
+
+      base.textContent =
+        `video.start_time = ${meta.start_time}\n` +
+        `video.duration   = ${meta.duration} sn\n` +
+        `camera.timezone  = ${meta.timezone}\n` +
+        `→ Date.parse()   = ${TM.startMs} (epoch ms)`;
+
+      // Özet segment tablosunu göster
+      let h = '<tr><th>özet zamanı</th><th>→</th><th>orijinal zaman</th><th>olay</th></tr>';
+      for (const s of SEG)
+        h += `<tr><td class="mono">${s.sum_start.toFixed(1)} – ${s.sum_end.toFixed(1)}</td>`
+          + `<td>→</td><td class="mono">${s.src_start.toFixed(1)} – ${s.src_end.toFixed(1)} `
+          + `(${TM.wallClock(s.src_start)})</td><td class="mono">${s.event_id}</td></tr>`;
+      segtbl.innerHTML = h;
+
+      tick();
+    })();
+
+    function tick() {
+      if (TM) {
+        const t = v.currentTime;
+        const s2s = TM.summaryToSource(t);
+        live.textContent =
+          `video.currentTime  = ${t.toFixed(3)}  ← medya zamanı\n` +
+          `TM.wallClock(t)    = ${TM.wallClock(t)}  ← kullanıcıya gösterilen\n` +
+          `TM.toWall(t)       = ${TM.toWall(t).toISOString()}\n` +
+          `timestamp_ms       = ${Math.round(t * 1000)}  ← DB alanı\n` +
+          `\nters yön:\n` +
+          `TM.toMedia("${TM.toWall(t).toISOString()}") = ${TM.toMedia(TM.toWall(t)).toFixed(3)}\n` +
+          `\nbu değer ÖZET video zamanı olsaydı:\n` +
+          (s2s ? `  → ${s2s.videoId} @ ${s2s.srcTime.toFixed(1)} sn `
+               + `(${TM.wallClock(s2s.srcTime)})  olay ${s2s.eventId}`
+               : '  → hiçbir segmente denk gelmiyor');
+      }
+      requestAnimationFrame(tick);
+    }
+  </script>
+  <!--LAB:END-->
+</div>
+
+<h3>Videonun sabitleri</h3>
+<div class="out" id="base">…</div>
+
+<h3>Canlı dönüşüm</h3>
+<div class="out" id="live">…</div>
+
+<h2>Özet video: zaman ekseni kırılır</h2>
+<p>
+  Ekran görüntüsünde <code>요약 길이 00:05:38 (3%)</code> yazıyordu — 24 saatlik
+  video 5.5 dakikaya inmiş. Bu <b>ayrı bir video dosyası</b> ve içinde olaylar
+  arka arkaya dizili. Özet videonun 12. saniyesi orijinalin 08:33:47'sine
+  denk gelir. Bu eşlemeyi backend'den almazsan özet üzerinde bbox çizemez,
+  olay listesiyle senkronize edemez ve "orijinale git" yapamazsın.
+</p>
+<table id="segtbl"><tr><td>yükleniyor…</td></tr></table>
+
+<div class="note warn">
+  <b>Zaman dilimi tuzağı:</b> Şemada <code>camera.timezone</code> var
+  (<code>Asia/Seoul</code>) ve tüm zamanlar <code>timestamptz</code>.
+  Sunucu <code>+09:00</code> ofsetiyle gönderiyor.
+  <code>Date.parse()</code> bunu doğru okur. Ama sunucu ofsetsiz
+  <code>"2025-05-20 08:30:00"</code> gönderirse tarayıcı bunu
+  <b>yerel saat</b> sayar ve makinen farklı bir dilimdeyse saatler kayar.
+  Her zaman ISO-8601 + ofset iste.
+</div>
+
+<div class="try">
+  <h3>Dene</h3>
+  <ol>
+    <li>Konsola <code>new Date("2025-05-20T08:30:00")</code> ve
+        <code>new Date("2025-05-20T08:30:00+09:00")</code> yaz. Farkı gör.</li>
+    <li><code>TimeMapper</code>'ın <code>startMs</code>'ini 0 yap. Tüm saatler
+        1970'e döner — kullanıcı ne düşünür?</li>
+    <li>Olay listesinden seek yapmak ters yönü kullanır:
+        <code>TM.toMedia("2025-05-20T08:31:12+09:00")</code> → kaç saniye?</li>
+    <li>Kodda <code>wallClock</code> yerine sadece <code>t.toFixed(0)</code>
+        göster. Ekran görüntüsündeki <code>08:34:15 / 23:59:59</code> yerine
+        <code>72 / 180</code> yazsaydı operatör için ne değişirdi?</li>
+  </ol>
+</div>
+
+<h2>Kod</h2>
+<pre id="src"></pre>
+
+<script src="lab.js"></script>
+<script>
+  header('Medya zamanı ↔ duvar saati',
+    'video.currentTime 72.4 der, kullanıcı 08:31:12 görmeli. Bu dönüşüm tek bir yerde yaşamalı.');
+</script>
+</body>
+</html>

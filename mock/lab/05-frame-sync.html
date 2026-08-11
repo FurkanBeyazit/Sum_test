@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="tr">
+<head><meta charset="utf-8"><link rel="stylesheet" href="lab.css"></head>
+<body>
+
+<p>
+  Kutuyu ne zaman yeniden çizeceğiz? Üç seçenek var ve aralarındaki fark
+  "akıcı" ile "tırtıklı" arasındaki fark.
+</p>
+
+<div class="box">
+  <!--LAB:START-->
+  <div class="stack" style="width:520px">
+    <video id="v" src="/api/videos/CAM01/stream" muted loop autoplay
+           style="width:100%;display:block"></video>
+    <canvas id="c" style="width:100%;height:100%"></canvas>
+  </div>
+
+  <script>
+    const v = document.getElementById('v'), c = document.getElementById('c');
+    const cx = c.getContext('2d');
+
+    // Üç ayrı sayaç — hangisi saniyede kaç kez tetikleniyor?
+    const hits = { timeupdate: 0, raf: 0, rvfc: 0 };
+    const last = { timeupdate: 0, raf: 0, rvfc: 0 };
+    const hz = { timeupdate: 0, raf: 0, rvfc: 0 };
+
+    // Her yöntemin BİLDİĞİ zaman ayrı tutulur — sapmayı göreceğiz
+    const tOf = { timeupdate: 0, raf: 0, rvfc: 0 };
+
+    /* --- 1) timeupdate: tarayıcı "zaman değişti" der ------------------
+       Spesifikasyon 15–250 ms arası serbest bırakır. Pratikte ~250 ms,
+       yani saniyede 4 kez. Saat göstermek için yeterli, çizim için değil. */
+    v.addEventListener('timeupdate', () => {
+      hits.timeupdate++; tOf.timeupdate = v.currentTime;
+    });
+
+    /* --- 2) requestAnimationFrame: ekranın tazeleme hızı --------------
+       60 Hz. Videodan bağımsız! Video 10 fps olsa bile 60 kez çalışır —
+       yani 6 kez aynı kareyi boşuna çizersin. Ayrıca v.currentTime'ı
+       okumak zorundasın ve o değer o an ekranda olan kareyle
+       tam olarak aynı olmayabilir. */
+    (function loop() {
+      hits.raf++; tOf.raf = v.currentTime;
+      requestAnimationFrame(loop);
+    })();
+
+    /* --- 3) requestVideoFrameCallback: DOĞRU YÖNTEM -------------------
+       Tarayıcı "yeni bir video karesi sundum" dediğinde çağrılır.
+       meta.mediaTime = O KARENİN kesin zamanı. Tahmin yok, sapma yok.
+       Video 10 fps ise saniyede 10 kez çalışır — ne eksik ne fazla. */
+    if (v.requestVideoFrameCallback) {
+      const step = (now, meta) => {
+        hits.rvfc++;
+        tOf.rvfc = meta.mediaTime;        // ← kritik fark
+        drawBox(meta.mediaTime);
+        v.requestVideoFrameCallback(step);
+      };
+      v.requestVideoFrameCallback(step);
+    }
+
+    // Hareketli bir kutu çiz — hangi zamanla çizersek o kadar doğru olur
+    function drawBox(t) {
+      c.width = c.clientWidth; c.height = c.clientHeight;
+      cx.clearRect(0, 0, c.width, c.height);
+      const x = (0.1 + 0.8 * ((t % 6) / 6)) * c.width;
+      cx.strokeStyle = '#e6194b'; cx.lineWidth = 3;
+      cx.strokeRect(x - 22, c.height * 0.4, 44, c.height * 0.3);
+      cx.fillStyle = '#e6194b'; cx.font = 'bold 12px monospace';
+      cx.fillText(t.toFixed(3), x - 20, c.height * 0.38);
+    }
+
+    // Saniyede bir sayaçları Hz'e çevir
+    setInterval(() => {
+      for (const k of ['timeupdate', 'raf', 'rvfc']) {
+        hz[k] = hits[k] - last[k]; last[k] = hits[k];
+      }
+      render();
+    }, 1000);
+
+    function render() {
+      const ref = tOf.rvfc || v.currentTime;
+      tbl.innerHTML =
+        '<tr><th>Yöntem</th><th>Hz</th><th>bildiği zaman</th><th>sapma</th><th>uygun mu</th></tr>' +
+        row('timeupdate', hz.timeupdate, tOf.timeupdate, ref, '❌ çizim için çok yavaş') +
+        row('requestAnimationFrame', hz.raf, tOf.raf, ref, '⚠️ boşa çizim, zaman dolaylı') +
+        row('requestVideoFrameCallback', hz.rvfc, tOf.rvfc, ref, '✅ kare başına tam bir kez');
+    }
+    function row(name, f, t, ref, verdict) {
+      const d = Math.abs(t - ref);
+      return `<tr><td class="mono">${name}</td><td class="mono">${f}</td>` +
+        `<td class="mono">${t.toFixed(3)}</td>` +
+        `<td class="mono">${d < 0.0005 ? '—' : '±' + d.toFixed(3) + ' sn'}</td>` +
+        `<td>${verdict}</td></tr>`;
+    }
+  </script>
+  <!--LAB:END-->
+</div>
+
+<table id="tbl"><tr><td>ölçülüyor… 1 saniye bekle</td></tr></table>
+
+<div class="note">
+  Bu video <b>10 fps</b>. Beklenen değerler:
+  <code>timeupdate ≈ 4</code>, <code>rAF ≈ 60</code>, <code>rVFC ≈ 10</code>.
+  <br>Sapma sütunu, o yöntemin bildiği zamanın gerçek kare zamanından ne
+  kadar uzak olduğunu gösterir. <code>timeupdate</code> ile
+  <b>çeyrek saniye</b> geride kalabilirsin — 10 fps'te 2-3 kare demek.
+</div>
+
+<h2>Neden önemli?</h2>
+<p>
+  Bir insan saniyede ~1.4 m yürür. 250 ms gecikme = <b>35 cm</b>. Ekranda
+  kutunun insanın yarım adım gerisinde sürüklenmesi demek. Kullanıcı bunu
+  "yazılım bozuk" diye okur.
+</p>
+<p>
+  Ayrıca <code>rAF</code> ile <code>v.currentTime</code> okumak kulağa doğru
+  gelir ama değildir: o değer <b>tarayıcının o anki tahminidir</b>, ekranda
+  gerçekten sunulan karenin zamanı değil. <code>rVFC</code>'nin
+  <code>meta.mediaTime</code> alanı ise <b>tam olarak</b> ekrandaki karenin
+  zamanıdır.
+</p>
+
+<div class="try">
+  <h3>Dene</h3>
+  <ol>
+    <li>Videoyu 4× hıza al (<code>v.playbackRate = 4</code> konsola yaz).
+        Hangi sayaç değişti, hangisi değişmedi?</li>
+    <li><code>drawBox(meta.mediaTime)</code> yerine
+        <code>drawBox(v.currentTime)</code> yaz. Fark gözle görülür mü?</li>
+    <li>rVFC'yi kapatıp yerine <code>timeupdate</code> içinde çizim yap.
+        Kutu nasıl hareket ediyor?</li>
+    <li>Safari/eski tarayıcı desteği: <code>v.requestVideoFrameCallback</code>
+        yoksa ne yaparsın? (Projede <code>overlay.js → start()</code> içinde
+        rAF'a düşen bir yedek var.)</li>
+  </ol>
+</div>
+
+<h2>Kod</h2>
+<pre id="src"></pre>
+
+<script src="lab.js"></script>
+<script>
+  header('timeupdate vs requestVideoFrameCallback',
+    'Çizimi yanlış olaya bağlarsan kutular insanların yarım adım gerisinde sürüklenir.');
+</script>
+</body>
+</html>

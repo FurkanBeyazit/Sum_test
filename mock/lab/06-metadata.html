@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="tr">
+<head><meta charset="utf-8"><link rel="stylesheet" href="lab.css"></head>
+<body>
+
+<p>
+  Şimdiye kadar tek kutu çizdik. Gerçekte sunucu <b>binlerce satır</b>
+  gönderiyor ve saniyede 10-30 kez "şu an hangileri geçerli" sorusuna
+  cevap vermemiz gerekiyor. Cevap: <b>önceden kare numarasına göre grupla.</b>
+</p>
+
+<div class="box">
+  <!--LAB:START-->
+  <div class="row">
+    <button id="load">Metadata yükle</button>
+    <button id="play">▶</button>
+    <label><input type="checkbox" id="showAll"> Tüm satırları göster (ham JSON)</label>
+  </div>
+
+  <div class="stack" style="width:640px">
+    <video id="v" src="/api/videos/CAM01/stream" muted loop
+           style="width:100%;display:block"></video>
+    <canvas id="c" style="width:100%;height:100%"></canvas>
+  </div>
+
+  <script>
+    const v = document.getElementById('v'), c = document.getElementById('c');
+    const cx = c.getContext('2d');
+    let DET = null;
+
+    document.getElementById('play').onclick = () => v.paused ? v.play() : v.pause();
+
+    document.getElementById('load').onclick = async () => {
+      const t0 = performance.now();
+
+      /* --- 1) İSTEK: zaman aralığına göre sayfalı --------------------
+         24 saatlik videoda hepsini birden istemek imkânsız (50 milyon satır).
+         Gerçek uygulamada oynatma konumunun etrafında ±30 sn istenir. */
+      const r = await fetch('/api/videos/CAM01/detections?from=0&to=180');
+      const d = await r.json();
+
+      /* --- 2) KABLO FORMATI ------------------------------------------
+         Nesne dizisi DEĞİL, satır dizisi:
+            [t, track_id, cls, conf, bbox_x, bbox_y, bbox_width, bbox_height]
+         Neden? { "track_id": 1, "bbox_x": 0.31, ... } yazmak her satırda
+         ~90 bayt anahtar ismi tekrarı demek. 50 milyon satırda 4.5 GB. */
+
+      /* --- 3) İNDEKSLEME: kare numarasına göre grupla -----------------
+         Bu adım olmadan her çizimde 3000 satırı taramak zorunda kalırdın —
+         saniyede 10 kez × 3000 = 30.000 karşılaştırma. Map ile O(1). */
+      const index = new Map();
+      for (const row of d.rows) {
+        const f = Math.round(row[0] * d.fps);      // 12.4 sn → kare 124
+        if (!index.has(f)) index.set(f, []);
+        index.get(f).push(row);
+      }
+      DET = { fps: d.fps, index, coord: d.coord, keys: d.keys, count: d.count };
+
+      log.set(
+        `istek     : GET /api/videos/CAM01/detections?from=0&to=180\n` +
+        `süre      : ${(performance.now() - t0).toFixed(0)} ms\n` +
+        `coord     : ${d.coord}\n` +
+        `keys      : ${JSON.stringify(d.keys)}\n` +
+        `fps       : ${d.fps}\n` +
+        `satır     : ${d.count}\n` +
+        `kare sayısı: ${index.size}   (ortalama ${(d.count/index.size).toFixed(2)} nesne/kare)\n\n` +
+        `İLK 3 SATIR (ham):\n` +
+        d.rows.slice(0, 3).map(r => '  ' + JSON.stringify(r)).join('\n') + '\n\n' +
+        `AYNI SATIRLAR OKUNAKLI:\n` +
+        d.rows.slice(0, 3).map(r =>
+          `  t=${r[0]}s  track#${r[1]}  ${r[2] ? 'vehicle' : 'person'}  ` +
+          `conf=${r[3]}  x=${r[4]} y=${r[5]} w=${r[6]} h=${r[7]}`).join('\n')
+      );
+      v.play();
+    };
+
+    /* --- 4) O ANKİ KARENİN KUTULARI ---------------------------------- */
+    function boxesAt(t) {
+      if (!DET) return [];
+      const f = Math.round(t * DET.fps);
+      let rows = DET.index.get(f);
+      // Kare tam eşleşmezse en yakın komşuya bak. Video fps'i ile detection
+      // fps'i farklıysa veya seek sonrası ara değerlerde bu gerekir.
+      for (let k = 1; k <= 3 && !rows; k++)
+        rows = DET.index.get(f - k) || DET.index.get(f + k);
+      return rows || [];
+    }
+
+    function draw(t) {
+      c.width = c.clientWidth; c.height = c.clientHeight;
+      cx.clearRect(0, 0, c.width, c.height);
+      const vw = v.videoWidth || 960, vh = v.videoHeight || 540;
+      const s = Math.min(c.width / vw, c.height / vh);
+      const dw = vw * s, dh = vh * s;
+      const ox = (c.width - dw) / 2, oy = (c.height - dh) / 2;
+
+      const rows = boxesAt(t);
+      for (const [, tid, cls, conf, bx, by, bw, bh] of rows) {
+        // xywh → piksel (ders 04)
+        const px = ox + bx * dw, py = oy + by * dh;
+        const pw = bw * dw, ph = bh * dh;
+        cx.strokeStyle = cls === 0 ? '#e6194b' : '#4363d8';
+        cx.lineWidth = 2;
+        cx.strokeRect(px, py, pw, ph);
+        cx.fillStyle = cx.strokeStyle;
+        cx.fillRect(px, Math.max(0, py - 14), 76, 14);
+        cx.fillStyle = '#fff'; cx.font = '10px monospace';
+        cx.fillText(`#${tid} ${(conf*100).toFixed(0)}%`, px + 3, Math.max(10, py - 4));
+      }
+      cx.fillStyle = 'rgba(0,0,0,.6)';
+      cx.fillRect(4, c.height - 20, 150, 16);
+      cx.fillStyle = '#fff'; cx.font = '11px monospace';
+      cx.fillText(`t=${t.toFixed(2)}  nesne=${rows.length}`, 8, c.height - 8);
+    }
+
+    if (v.requestVideoFrameCallback) {
+      const step = (n, m) => { draw(m.mediaTime); v.requestVideoFrameCallback(step); };
+      v.requestVideoFrameCallback(step);
+    }
+
+    document.getElementById('showAll').onchange = e => {
+      if (!DET || !e.target.checked) return;
+      const f = Math.round(v.currentTime * DET.fps);
+      log.set('Kare ' + f + ' (t=' + v.currentTime.toFixed(2) + '):\n' +
+        JSON.stringify(DET.index.get(f) || [], null, 1));
+    };
+  </script>
+  <!--LAB:END-->
+</div>
+
+<div class="out" id="log">"Metadata yükle" butonuna bas.</div>
+
+<h2>Neden satır dizisi, neden Map?</h2>
+<table>
+  <tr><th>Yaklaşım</th><th>50M satır için boyut</th><th>Arama maliyeti</th></tr>
+  <tr><td>Nesne dizisi <code>[{track_id:1,bbox_x:0.31,…}]</code></td>
+      <td>~6 GB</td><td>O(n) tarama</td></tr>
+  <tr><td>Satır dizisi <code>[[12.4,1,0,0.9,0.31,…]]</code></td>
+      <td>~2 GB</td><td>O(n) tarama</td></tr>
+  <tr><td>Satır dizisi + kare Map'i</td>
+      <td>~2 GB</td><td><b>O(1)</b></td></tr>
+  <tr><td>+ zaman aralığı sayfalaması</td>
+      <td><b>~2 MB</b> (30 sn'lik pencere)</td><td>O(1)</td></tr>
+</table>
+
+<div class="note warn">
+  <b>Açık soru:</b> Detection her karede mi var, yoksa örneklenmiş mi
+  (mesela 30 fps videoda 5 fps detection)? Örneklenmişse aradaki karelerde
+  kutu <b>donar</b> — enterpolasyon yazman gerekir. Backend'e sorulacaklar
+  listesinde 🔴 4 numaralı madde bu.
+</div>
+
+<div class="try">
+  <h3>Dene</h3>
+  <ol>
+    <li>Kodda <code>for (let k = 1; k &lt;= 3 && !rows; k++)</code> komşu
+        arama döngüsünü sil. Seek yaptığında kutular kayboluyor mu?</li>
+    <li><code>index</code> yerine her çizimde
+        <code>d.rows.filter(r =&gt; Math.abs(r[0]-t) &lt; 0.05)</code> kullan.
+        Performans farkını DevTools → Performance ile ölç.</li>
+    <li>İsteği <code>?from=60&to=90</code> yap. Video başındayken kutu yok,
+        60. saniyeden sonra beliriyor. Gerçek uygulamada oynatma ilerledikçe
+        yeni pencere istenir.</li>
+    <li><code>?cls=vehicle</code> ekle — sadece araçlar gelir. Filtrelemeyi
+        sunucu mu yapmalı, istemci mi? (İpucu: veri zaten elindeyse istemci.)</li>
+  </ol>
+</div>
+
+<h2>Kod</h2>
+<pre id="src"></pre>
+
+<script src="lab.js"></script>
+<script>
+  header('Gerçek metadata ile tüm kutular',
+    'Binlerce satırı saniyede 10 kez taramazsın — kare numarasına göre bir kez indekslersin.');
+  const log = makeLog('#log');
+</script>
+</body>
+</html>

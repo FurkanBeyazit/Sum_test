@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="tr">
+<head><meta charset="utf-8"><link rel="stylesheet" href="lab.css"></head>
+<body>
+
+<p>
+  Canvas'ın <b>iki ayrı boyutu</b> vardır ve bu ikisini karıştırmak, kutuların
+  ve yazıların bulanık çıkmasının tek sebebidir.
+</p>
+<table>
+  <tr><th></th><th>CSS boyutu</th><th>İç (buffer) boyutu</th></tr>
+  <tr><td>Nasıl ayarlanır</td><td><code>style.width = '400px'</code></td>
+      <td><code>canvas.width = 400</code></td></tr>
+  <tr><td>Ne demek</td><td>ekranda kapladığı yer</td><td>kaç piksel çizilebilir</td></tr>
+  <tr><td>Eşit değilse</td><td colspan="2">tarayıcı görüntüyü <b>gerer</b> → bulanıklık</td></tr>
+</table>
+<p>
+  Retina/HiDPI ekranlarda 1 CSS pikseli = 2 (veya 1.25, 1.5, 3) fiziksel
+  piksel. <code>devicePixelRatio</code> bunu söyler.
+</p>
+
+<div class="box">
+  <!--LAB:START-->
+  <div class="row">
+    <b>Senin ekranın: devicePixelRatio = <span id="dpr" class="mono"></span></b>
+    <span class="muted" id="hint"></span>
+  </div>
+
+  <div class="row" style="align-items:flex-start">
+    <div>
+      <div style="font-size:13px;margin-bottom:4px"><b>YANLIŞ</b> — DPR yok</div>
+      <canvas id="bad" style="width:300px;height:170px;border:1px solid #ccc"></canvas>
+      <div class="mono" id="badInfo" style="font-size:11px"></div>
+    </div>
+    <div>
+      <div style="font-size:13px;margin-bottom:4px"><b>DOĞRU</b> — DPR uygulanmış</div>
+      <canvas id="good" style="width:300px;height:170px;border:1px solid #ccc"></canvas>
+      <div class="mono" id="goodInfo" style="font-size:11px"></div>
+    </div>
+  </div>
+
+  <script>
+    const dpr = window.devicePixelRatio || 1;
+    document.getElementById('dpr').textContent = dpr;
+    document.getElementById('hint').textContent = dpr === 1
+      ? '(standart ekran — farkı görmek için tarayıcıyı Ctrl + "+" ile zoom yap)'
+      : '(HiDPI ekran — fark hemen görünmeli)';
+
+    // Aynı içeriği iki canvas'a çiziyoruz. Tek fark: buffer boyutu.
+    function scene(cx, W, H) {
+      cx.clearRect(0, 0, W, H);
+      // ince çizgiler — bulanıklık en çok burada belli olur
+      cx.strokeStyle = '#e6194b'; cx.lineWidth = 1;
+      cx.strokeRect(20.5, 20.5, 120, 80);
+      cx.lineWidth = 2;
+      cx.strokeStyle = '#4363d8';
+      cx.strokeRect(150, 30, 110, 70);
+      // köşe işaretleri
+      cx.strokeStyle = '#111'; cx.lineWidth = 1;
+      cx.beginPath();
+      for (let i = 0; i < 10; i++) {
+        cx.moveTo(20 + i * 12, 115); cx.lineTo(20 + i * 12, 128);
+      }
+      cx.stroke();
+      // yazı
+      cx.fillStyle = '#111'; cx.font = '11px monospace';
+      cx.fillText('person #1  conf 0.93', 20, 145);
+      cx.font = 'bold 13px sans-serif';
+      cx.fillText('BBox etiketi', 150, 145);
+    }
+
+    /* --- YANLIŞ: buffer = CSS boyutu -------------------------------
+       300 CSS pikseli 600 fiziksel piksele gerilir → her şey yumuşar. */
+    {
+      const c = document.getElementById('bad');
+      c.width = 300; c.height = 170;               // DPR yok sayıldı
+      scene(c.getContext('2d'), 300, 170);
+      document.getElementById('badInfo').textContent =
+        `CSS 300×170 · buffer ${c.width}×${c.height} → ${dpr}× gerilme`;
+    }
+
+    /* --- DOĞRU: buffer = CSS × DPR ---------------------------------
+       Buffer'ı büyütüp context'i aynı oranda ölçekliyoruz. Böylece
+       çizim kodunda hâlâ CSS piksel koordinatı kullanabiliriz —
+       hiçbir yerde "×2" yazmak zorunda kalmayız. */
+    {
+      const c = document.getElementById('good');
+      c.width  = Math.round(300 * dpr);
+      c.height = Math.round(170 * dpr);
+      const cx = c.getContext('2d');
+      cx.scale(dpr, dpr);                          // ← tek satırlık sihir
+      scene(cx, 300, 170);
+      document.getElementById('goodInfo').textContent =
+        `CSS 300×170 · buffer ${c.width}×${c.height} → 1:1, keskin`;
+    }
+  </script>
+  <!--LAB:END-->
+</div>
+
+<div class="note">
+  <b>DPR = 1 görüyorsan</b> farkı göremezsin. Tarayıcıyı
+  <span class="kbd">Ctrl</span> + <span class="kbd">+</span> ile %150'ye
+  zoom yap ve sayfayı <b>yenile</b> — <code>devicePixelRatio</code> 1.5 olur,
+  soldaki canvas bulanıklaşır.
+</div>
+
+<h2>Doğru yeniden boyutlandırma deseni</h2>
+<pre>function resize(canvas, ctx) {
+  const dpr = window.devicePixelRatio || 1;
+  const r = canvas.getBoundingClientRect();   // CSS boyutu (kesirli olabilir)
+
+  canvas.width  = Math.round(r.width  * dpr); // buffer
+  canvas.height = Math.round(r.height * dpr);
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);     // scale() değil setTransform()
+  //  ↑ Neden setTransform? scale() birikimlidir. resize() iki kez çağrılırsa
+  //    ölçek 2×2=4 olur. setTransform her seferinde sıfırdan kurar.
+
+  return { w: r.width, h: r.height };         // çizimde bu CSS boyutlarını kullan
+}</pre>
+<p>
+  Projede bu tam olarak <code>overlay.js → resize()</code> içinde. Ayrıca
+  <code>canvas.width</code>'e yazmak canvas'ı <b>temizler</b> — bu yüzden
+  resize'dan sonra hemen yeniden çizmek gerekir.
+</p>
+
+<div class="try">
+  <h3>Dene</h3>
+  <ol>
+    <li>Zoom'u %200 yap, sayfayı yenile. İki canvas arasındaki fark bariz.</li>
+    <li>Doğru canvas'ta <code>cx.scale(dpr, dpr)</code> satırını sil. Çizim
+        sol üst köşede küçücük kalır — buffer büyüdü ama koordinatlar
+        ölçeklenmedi.</li>
+    <li><code>cx.scale(dpr,dpr)</code> yerine <code>cx.setTransform(...)</code>
+        kullan ve <code>scene()</code>'i iki kez çağır. <code>scale</code> ile
+        ikinci çağrıda ne olur?</li>
+    <li><code>strokeRect(20.5, 20.5, …)</code> içindeki <code>.5</code>
+        kaydırmasını kaldır. 1 piksellik çizgiler neden yarım piksel
+        kaydırılınca daha keskin çıkar?</li>
+  </ol>
+</div>
+
+<h2>Kod</h2>
+<pre id="src"></pre>
+
+<script src="lab.js"></script>
+<script>
+  header('devicePixelRatio ve bulanıklık',
+    'Canvas\'ın iki boyutu var. Karıştırırsan retina ekranda her şey yumuşak çıkar.');
+</script>
+</body>
+</html>
