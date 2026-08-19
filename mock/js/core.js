@@ -8,11 +8,40 @@
 /* ------------------------------------------------------------ özellikler --
    Backend'in hazır olma durumuna göre arayüzü açıp kapatır.
    Kod silinmez — sadece görünmez olur. Backend hazır olunca true yap. */
+/**
+ * Veri kaynağı: 'mock' (yerel üretilmiş veri) | 'live' (gerçek DVSummary API).
+ *   ?api=live   ile geç, ya da  localStorage.setItem('ff.api','live')
+ */
+function modeParam() {
+  // ?api=live hem hash'ten önce hem sonra yazılabilsin:
+  //   /?api=live#/single/1   ve   /#/single/1?api=live
+  const direct = new URLSearchParams(location.search).get('api');
+  if (direct) return direct;
+  const hq = location.hash.split('?')[1];
+  return hq ? new URLSearchParams(hq).get('api') : null;
+}
+
+const modeExplicit = modeParam();
+export const API_MODE =
+  modeExplicit || localStorage.getItem('ff.api') || 'mock';
+
+// URL'de açıkça belirtildiyse kalıcı yap — yönlendirmeler hash'i değiştirince
+// mod kaybolmasın. Geri dönmek için: ?api=mock
+if (modeExplicit) localStorage.setItem('ff.api', modeExplicit);
+
+const LIVE = API_MODE === 'live';
+
 export const FEATURES = {
-  reid: localStorage.getItem('ff.reid') === '1',   // Re-ID: fotoğraftan sorgu
+  // Re-ID: gerçek pipeline'da SOLIDER yok, embedding üretilmiyor → canlıda kapalı
+  reid: !LIVE && localStorage.getItem('ff.reid') === '1',
   multiCamera: true,
   eventSearch: true,       // VLM açıklamalarında metin filtresi
   map: false,              // 지도 보기 — camera.lat/lon hazır, UI yok
+  // Aşağıdakiler detection verisine dayanır. Gerçek API'de o veri
+  // sunucudaki SQLite'ta kilitli, HTTP'den çıkmıyor → canlıda kapalı.
+  bbox: !LIVE,
+  objects: !LIVE,
+  candidateScore: !LIVE,
 };
 // Konsoldan aç:  localStorage.setItem('ff.reid','1'); location.reload()
 
@@ -78,7 +107,7 @@ class Store {
 
 export const store = new Store({
   user: null,
-  lang: localStorage.getItem('lang') || 'ko',
+  lang: localStorage.getItem('lang') || 'en',
   groups: [],
   eventTypes: {},
   attributes: null,
@@ -114,6 +143,25 @@ export const store = new Store({
 /* ------------------------------------------------------------- i18n ------ */
 
 const T = {
+  en: {
+    videoList: 'Video Collection', objectFilter: 'Object filter',
+    videoInfo: 'Video info', summaryInfo: 'Analysis info',
+    eventFlow: 'Event timeline',
+    reSummarize: 'Re-analyze', viewOriginal: 'Open original',
+    allEvents: 'All events',
+    apply: 'Apply', reset: 'Reset', objectKind: 'Object type',
+    all: 'All', person: 'Person', vehicle: 'Vehicle', gender: 'Gender',
+    male: 'Male', female: 'Female', upperColor: 'Top color',
+    videoLength: 'Video length', summaryLength: 'Summary length',
+    mainObject: 'Main objects', mainEvent: 'Events',
+    generatedAt: 'Analyzed at',
+    single: 'Analysis', multi: 'Multi-camera', objects: 'Objects',
+    jobs: 'Jobs', settings: 'Settings', system: 'System', api: 'API contract',
+    search: 'Search events', prompt: 'Analysis prompt',
+    track: 'Track', tracking: 'Track list', candidates: 'Candidates',
+    similarity: 'Similarity', continueSearch: 'Continue', sameperson: 'Same person',
+    notsame: 'Different', logout: 'Log out', carry: 'Carried item', age: 'Age',
+  },
   ko: {
     videoList: '영상 그룹', objectFilter: '객체 필터', videoInfo: '영상 정보',
     summaryInfo: '요약 정보', eventFlow: '시간별 사건 흐름',
@@ -147,7 +195,7 @@ const T = {
     notsame: 'Farklı', logout: 'Çıkış', carry: 'Taşınan eşya', age: 'Yaş',
   },
 };
-export function t(k) { return (T[store.get('lang')] || T.ko)[k] || k; }
+export function t(k) { return (T[store.get('lang')] || T.en)[k] || k; }
 export function loc(obj, base) {
   const l = store.get('lang');
   return obj[`${base}_${l}`] ?? obj[`${base}_ko`] ?? obj[base] ?? '';
@@ -278,7 +326,7 @@ const qs = (o) => {
   return s ? '?' + s : '';
 };
 
-export const api = {
+const mockApi = {
   health: () => req('/health'),
   openapi: () => req('/openapi'),
 
@@ -315,6 +363,10 @@ export const api = {
   jobStreamUrl: (id) => `${BASE}/jobs/${id}/stream`,
   jobCancel: (id) => req(`/jobs/${id}/cancel`, { method: 'POST' }),
 
+  /* Mock'ta analiz sonucu önbelleklenmiyor — live.js'teki karşılığı gerçek
+     işi yapar. Ekran kodu ikisini ayırt etmesin diye burada boş duruyor. */
+  invalidate: () => {},
+
   reidStart: (body) => req('/reid', { method: 'POST', body: JSON.stringify(body) }),
   reid: (sid) => req(`/reid/${sid}`),
   reidStreamUrl: (sid) => `${BASE}/reid/${sid}/stream`,
@@ -338,12 +390,28 @@ export const api = {
   exportGet: (id) => req(`/exports/${id}`),
 };
 
+/* Canlı modda `api` gerçek backend adaptörüyle değiştirilir. ES modül canlı
+   bağlaması sayesinde app.js'te tek satır değişmez — `import { api }` aynı
+   kalır, işaret ettiği nesne değişir. */
+export let api = mockApi;
+
+if (LIVE) {
+  const { initLive } = await import('./live.js');
+  api = await initLive();
+  console.info('[core] veri kaynağı: GERÇEK API (/live → DVSummary)');
+} else {
+  console.info('[core] veri kaynağı: mock');
+}
+
 /* ----------------------------------------------------------- SSE utils --- */
 /**
  * Uzun işleri dinler. Üretimde WebSocket'e çevrilecekse sadece bu fonksiyon
  * değişir — çağıran kod aynı kalır.
  */
 export function listen(url, onEvent, eventName = 'message') {
+  // Gerçek backend'de SSE yok; adaptör null döndürür. Boş URL'e EventSource
+  // açmak anlamsız bir istek üretir — sessizce vazgeç.
+  if (!url) return () => {};
   const es = new EventSource(url);
   const handler = (e) => {
     try { onEvent(JSON.parse(e.data)); } catch { /* ping */ }

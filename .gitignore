@@ -112,3 +112,5 @@ Thumbs.db
 
 
 mock/assets
+# ffmpeg birlestirme calisma alani (gecici parcalar + birlesik MP4)
+.merge/

@@ -590,6 +590,11 @@ a { color: var(--ac); text-decoration: none; }
             overflow: hidden; }
 .progline i { display: block; height: 100%; background: var(--ac);
               transition: width .3s; }
+/* Gerçek backend ilerleme yüzdesi vermiyor — yüzde uydurmak yerine
+   belirsiz (indeterminate) çubuk: "çalışıyor" der, oran iddia etmez. */
+.progline i.indet { width: 35% !important; transition: none;
+                    animation: indet 1.1s ease-in-out infinite; }
+@keyframes indet { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
 
 .simrow {
   display: flex; gap: 9px; padding: 8px 11px; align-items: center;
@@ -750,6 +755,61 @@ table.tbl tr:hover td { background: var(--bg-2); }
 .apirow .m { font-weight: 800; }
 .m-GET { color: #86efac; } .m-POST { color: #fde047; }
 .m-PUT { color: #93c5fd; } .m-DELETE { color: #fca5a5; }
+
+/* ---------------------------------------------------- Upload & Analysis -- */
+
+.updrop { border: 1.5px dashed var(--line); border-radius: 8px;
+          padding: 20px; text-align: center; cursor: pointer;
+          display: grid; gap: 4px; place-items: center;
+          color: var(--tx-2); transition: border-color .15s, background .15s; }
+.updrop:hover, .updrop.over { border-color: var(--ac);
+                              background: rgba(56,189,248,.06); }
+
+.uptl { border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+        background: var(--bg-2); }
+.uptime { display: flex; font-size: 11px; color: var(--tx-2);
+          margin-bottom: 6px; font-family: var(--mono, monospace); }
+
+/* Zaman çizgisi: parçalar mutlak konumlu, çakışma üstte kırmızı bant */
+.uptrack { position: relative; height: 38px; border-radius: 5px;
+           background: var(--bg-3); overflow: hidden;
+           touch-action: none; }        /* sürüklerken sayfa kaymasın */
+.uptrack.over { box-shadow: inset 0 0 0 2px var(--acc); }
+.upbar { position: absolute; top: 4px; height: 30px; border-radius: 4px;
+         background: #16a34a; color: #f0fdf4; font-size: 11px;
+         display: grid; place-items: center; cursor: grab;
+         box-shadow: inset 0 0 0 1px rgba(0,0,0,.25); overflow: hidden; }
+.upbar.on { background: #22c55e; box-shadow: inset 0 0 0 2px #bbf7d0; }
+/* süresi henüz bilinmeyen parça (AVI / yüklenmemiş) — taralı ve soluk,
+   yine de sürüklenebilir; uzunluğu tahmini olduğu için kesikli çerçeve */
+.upbar.est { background: repeating-linear-gradient(45deg,
+               #3f6212 0 6px, #4d7c0f 6px 12px);
+             color: #ecfccb; opacity: .8;
+             box-shadow: inset 0 0 0 1px rgba(0,0,0,.25); }
+.upbar.est.on { opacity: 1; box-shadow: inset 0 0 0 2px #d9f99d; }
+/* sürükleme sırasında: imleç, üste al, kenarlık */
+.upbar.drag { cursor: grabbing; z-index: 5; opacity: .92;
+              box-shadow: inset 0 0 0 2px #fff, 0 4px 12px rgba(0,0,0,.4); }
+/* komşunun ucuna yapıştığında yanıp sönen ipucu */
+.upbar.snap { box-shadow: inset 0 0 0 2px #38bdf8, 0 4px 12px rgba(0,0,0,.4); }
+/* sürüklerken alttaki bilgi satırı canlı saati gösterir */
+.updrag-info { color: var(--acc); font-family: var(--mono, monospace); }
+.upbar span { padding: 0 6px; white-space: nowrap; overflow: hidden;
+              text-overflow: ellipsis; }
+/* Çakışan aralık — ikinci kayıtta kırpılacak bölge */
+.upover { position: absolute; top: 0; height: 38px; background: #ef4444;
+          opacity: .85; pointer-events: none; }
+.upgap { position: absolute; top: 4px; height: 30px;
+         background: repeating-linear-gradient(45deg,
+           transparent 0 5px, rgba(255,255,255,.05) 5px 10px);
+         border: 1px dashed var(--line); border-radius: 4px;
+         display: grid; place-items: center;
+         font-size: 10px; color: var(--tx-2); }
+
+.uprow { display: flex; align-items: center; gap: 8px; padding: 5px 8px;
+         border: 1px solid var(--line); border-radius: 6px;
+         background: var(--bg-2); cursor: pointer; }
+.uprow.on { border-color: var(--ac); background: rgba(56,189,248,.07); }
 
 @media (max-width: 1400px) {
   :root { --sidebar-w: 240px; --events-w: 300px; }

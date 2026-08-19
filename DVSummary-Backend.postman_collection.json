@@ -1,0 +1,1210 @@
+{
+  "info": {
+    "_postman_id": "31c10d58-ebf5-468d-9018-6a0c6322c244",
+    "name": "DVSummary-Backend",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "29467670"
+  },
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const expectedErrorStatuses = {",
+          "  \"6. 중복 큐 등록 거부 확인\": [409],",
+          "  \"8. 영상의 VLM 분석 결과 전체 조회\": [200, 404],",
+          "  \"12. 삭제된 큐 작업 조회 실패 확인\": [404],",
+          "  \"13. 잘못된 큐 상태 필터 거부 확인\": [400],",
+          "  \"14. 존재하지 않는 영상의 큐 등록 거부 확인\": [404]",
+          "};",
+          "",
+          "const expectedStatuses = expectedErrorStatuses[pm.info.requestName];",
+          "pm.test(`[전체 API] ${pm.info.requestName} 응답 상태 정상`, function () {",
+          "  if (expectedStatuses) {",
+          "    pm.expect(pm.response.code).to.be.oneOf(expectedStatuses);",
+          "    return;",
+          "  }",
+          "  pm.expect(pm.response.code).to.be.within(200, 299);",
+          "});"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "BASE_URL",
+      "value": "http://127.0.0.1:8000"
+    },
+    {
+      "key": "GROUP_ID",
+      "value": "1"
+    },
+    {
+      "key": "GROUP_ID_2",
+      "value": "2"
+    },
+    {
+      "key": "GROUP_ID_3",
+      "value": "3"
+    },
+    {
+      "key": "VIDEO_ID",
+      "value": "1"
+    },
+    {
+      "key": "VIDEO_ID_1",
+      "value": "1"
+    },
+    {
+      "key": "VIDEO_ID_2",
+      "value": "2"
+    },
+    {
+      "key": "VIDEO_ID_3",
+      "value": "3"
+    }
+  ],
+  "item": [
+    {
+      "name": "0. 테스트 데이터 초기화",
+      "description": "Collection Runner 실행 전에 PostgreSQL 데이터와 동영상, SQLite 파일을 모두 삭제합니다.",
+      "item": [
+        {
+          "name": "0.1. 모든 테스트 데이터 삭제",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Test data reset\", function () { pm.response.to.have.status(200); });",
+                  "const response = pm.response.json();",
+                  "pm.test(\"Reset result returned\", function () { pm.expect(response.status).to.eql(\"ok\"); pm.expect(response.deleted_rows).to.be.an(\"object\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "description": "debug 모드 전용 API입니다. 모든 애플리케이션 DB 레코드와 관리 중인 동영상 및 SQLite 파일을 삭제합니다.",
+            "method": "DELETE",
+            "header": [],
+            "url": "{{BASE_URL}}/test/reset?confirm=DELETE_ALL_TEST_DATA"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "1. Welcome",
+      "item": [
+        {
+          "name": "base",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{BASE_URL}}/"
+          },
+          "response": []
+        },
+        {
+          "name": "info",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{BASE_URL}}/info"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "2. status",
+      "item": [
+        {
+          "name": "Database, Redis, vLLM과 Analysis Worker 전체 상태 조회",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Health endpoint responds\", function () { pm.expect(pm.response.code).to.be.oneOf([200, 503]); });",
+                  "const response = pm.response.json();",
+                  "pm.test(\"Database status is included\", function () { pm.expect(response.database.status).to.be.oneOf([\"ok\", \"unavailable\"]); });",
+                  "pm.test(\"Redis status is included\", function () { pm.expect(response.cachedb.status).to.be.oneOf([\"ok\", \"unavailable\"]); });",
+                  "pm.test(\"vLLM status is included\", function () { pm.expect(response.vllm.status).to.be.oneOf([\"ok\", \"unavailable\"]); });",
+                  "pm.test(\"All active Analysis workers are included\", function () { pm.expect(response.analysis.worker_count).to.eql(response.analysis.workers.length); pm.expect(response.analysis.workers).to.be.an(\"array\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "description": "PostgreSQL, Redis, vLLM 상태와 heartbeat TTL이 유효한 모든 Analysis worker 컨테이너 상태를 함께 조회합니다.",
+            "method": "GET",
+            "header": [],
+            "url": "{{BASE_URL}}/status/health"
+          },
+          "response": []
+        },
+        {
+          "name": "db health check",
+          "protocolProfileBehavior": {
+            "disableBodyPruning": true
+          },
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{BASE_URL}}/status/health/db",
+              "host": [
+                "{{BASE_URL}}"
+              ],
+              "path": [
+                "status",
+                "health",
+                "db"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Redis cache health check",
+          "request": {
+            "description": "Redis에 PING을 보내 연결 및 응답 상태를 확인합니다.",
+            "method": "GET",
+            "header": [],
+            "url": "{{BASE_URL}}/status/health/cachedb"
+          },
+          "response": []
+        },
+        {
+          "name": "vLLM health check",
+          "request": {
+            "description": "vLLM 컨테이너의 /health API 응답 상태를 확인합니다.",
+            "method": "GET",
+            "header": [],
+            "url": "{{BASE_URL}}/status/health/vllm"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "3. Video 준비 및 검증",
+      "item": [
+        {
+          "name": "1. 테스트 그룹 생성",
+          "item": [
+            {
+              "name": "1.1. Site-A 그룹 생성",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test(\"Group created\", function () { pm.response.to.have.status(201); });",
+                      "const response = pm.response.json();",
+                      "pm.collectionVariables.set(\"GROUP_ID\", response.id);"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "name",
+                      "value": "Site-A",
+                      "type": "text",
+                      "uuid": "1092d3b1-be17-43fa-b78d-f0fed6a050d5"
+                    },
+                    {
+                      "key": "description",
+                      "value": "Main surveillance group For Test",
+                      "type": "text",
+                      "uuid": "ae4d0bbe-faf6-4315-84f9-0195b5a58f46"
+                    }
+                  ]
+                },
+                "url": {
+                  "raw": "{{BASE_URL}}/video/groups",
+                  "host": [
+                    "{{BASE_URL}}"
+                  ],
+                  "path": [
+                    "video",
+                    "groups"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "1.2. Site-B 그룹 생성",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test(\"Site-B group created\", function () { pm.response.to.have.status(201); });",
+                      "pm.collectionVariables.set(\"GROUP_ID_2\", pm.response.json().id);"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "name",
+                      "value": "Site-B",
+                      "type": "text",
+                      "uuid": "1092d3b1-be17-43fa-b78d-f0fed6a050d5"
+                    },
+                    {
+                      "key": "description",
+                      "value": "Main surveillance group For Test",
+                      "type": "text",
+                      "uuid": "ae4d0bbe-faf6-4315-84f9-0195b5a58f46"
+                    }
+                  ]
+                },
+                "url": {
+                  "raw": "{{BASE_URL}}/video/groups",
+                  "host": [
+                    "{{BASE_URL}}"
+                  ],
+                  "path": [
+                    "video",
+                    "groups"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "1.3. Site-C 그룹 생성",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test(\"Site-C group created\", function () { pm.response.to.have.status(201); });",
+                      "pm.collectionVariables.set(\"GROUP_ID_3\", pm.response.json().id);"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "name",
+                      "value": "Site-C",
+                      "type": "text",
+                      "uuid": "1092d3b1-be17-43fa-b78d-f0fed6a050d5"
+                    },
+                    {
+                      "key": "description",
+                      "value": "surveillance group C For Test",
+                      "type": "text",
+                      "uuid": "ae4d0bbe-faf6-4315-84f9-0195b5a58f46"
+                    }
+                  ]
+                },
+                "url": {
+                  "raw": "{{BASE_URL}}/video/groups",
+                  "host": [
+                    "{{BASE_URL}}"
+                  ],
+                  "path": [
+                    "video",
+                    "groups"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "2. 그룹 조회",
+          "item": [
+            {
+              "name": "2.1. 그룹 목록 조회",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{BASE_URL}}/video/groups"
+              },
+              "response": []
+            },
+            {
+              "name": "2.2. 생성한 그룹 상세 조회",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{BASE_URL}}/video/groups/{{GROUP_ID}}"
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "3. 그룹 수정",
+          "item": [
+            {
+              "name": "3.1. 생성한 그룹 수정",
+              "request": {
+                "method": "PUT",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "name",
+                      "value": "Site-A-Updated",
+                      "type": "text"
+                    },
+                    {
+                      "key": "description",
+                      "value": "Updated surveillance group for test",
+                      "type": "text"
+                    }
+                  ]
+                },
+                "url": "{{BASE_URL}}/video/groups/{{GROUP_ID}}"
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "4. 업로드할 Video 예약",
+          "item": [
+            {
+              "name": "4.1. Video 3개 예약",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test(\"Videos reserved\", function () { pm.response.to.have.status(201); });",
+                      "const response = pm.response.json();",
+                      "pm.test(\"Three videos reserved\", function () { pm.expect(response).to.have.lengthOf(3); });",
+                      "response.forEach((video, index) => pm.collectionVariables.set(`VIDEO_ID_${index + 1}`, video.video_id));",
+                      "pm.collectionVariables.set(\"VIDEO_ID\", response[0].video_id);"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"group_id\": {{GROUP_ID}},\n  \"videos\": [\n    {\"client_key\": \"cam-a-001\"},\n    {\"client_key\": \"cam-a-002\"},\n    {\"client_key\": \"cam-a-003\"}\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": "{{BASE_URL}}/video/reservations"
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "5. 예약한 Video 업로드",
+          "item": [
+            {
+              "name": "5.1. 첫 번째 Video 업로드",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test(\"Video 1 uploaded\", function () { pm.response.to.have.status(200); });",
+                      "pm.test(\"Uploaded reserved video 1\", function () { pm.expect(pm.response.json().id).to.eql(Number(pm.collectionVariables.get(\"VIDEO_ID_1\"))); });"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file"
+                    },
+                    {
+                      "key": "name",
+                      "value": "Entrance Cam Segment 1",
+                      "type": "text"
+                    },
+                    {
+                      "key": "description",
+                      "value": "Morning footage",
+                      "type": "text"
+                    },
+                    {
+                      "key": "start_at",
+                      "value": "2026-08-07T09:00:00",
+                      "type": "text"
+                    },
+                    {
+                      "key": "is_ptz",
+                      "value": "false",
+                      "type": "text"
+                    },
+                    {
+                      "key": "latitude",
+                      "value": "37.5665",
+                      "type": "text"
+                    },
+                    {
+                      "key": "longitude",
+                      "value": "126.9780",
+                      "type": "text"
+                    }
+                  ]
+                },
+                "url": "{{BASE_URL}}/video/{{VIDEO_ID_1}}/upload"
+              },
+              "response": []
+            },
+            {
+              "name": "5.2. 두 번째 Video 업로드",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test(\"Video 2 uploaded\", function () { pm.response.to.have.status(200); });",
+                      "pm.test(\"Uploaded reserved video 2\", function () { pm.expect(pm.response.json().id).to.eql(Number(pm.collectionVariables.get(\"VIDEO_ID_2\"))); });"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file"
+                    },
+                    {
+                      "key": "name",
+                      "value": "Entrance Cam Segment 2",
+                      "type": "text"
+                    },
+                    {
+                      "key": "description",
+                      "value": "Morning footage segment 2",
+                      "type": "text"
+                    },
+                    {
+                      "key": "start_at",
+                      "value": "2026-08-07T09:05:00",
+                      "type": "text"
+                    },
+                    {
+                      "key": "is_ptz",
+                      "value": "false",
+                      "type": "text"
+                    },
+                    {
+                      "key": "latitude",
+                      "value": "37.5665",
+                      "type": "text"
+                    },
+                    {
+                      "key": "longitude",
+                      "value": "126.9780",
+                      "type": "text"
+                    }
+                  ]
+                },
+                "url": "{{BASE_URL}}/video/{{VIDEO_ID_2}}/upload"
+              },
+              "response": []
+            },
+            {
+              "name": "5.3. 세 번째 Video 업로드",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test(\"Video 3 uploaded\", function () { pm.response.to.have.status(200); });",
+                      "pm.test(\"Uploaded reserved video 3\", function () { pm.expect(pm.response.json().id).to.eql(Number(pm.collectionVariables.get(\"VIDEO_ID_3\"))); });"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "file",
+                      "type": "file"
+                    },
+                    {
+                      "key": "name",
+                      "value": "Entrance Cam Segment 3",
+                      "type": "text"
+                    },
+                    {
+                      "key": "description",
+                      "value": "Morning footage segment 3",
+                      "type": "text"
+                    },
+                    {
+                      "key": "start_at",
+                      "value": "2026-08-07T09:10:00",
+                      "type": "text"
+                    },
+                    {
+                      "key": "is_ptz",
+                      "value": "false",
+                      "type": "text"
+                    },
+                    {
+                      "key": "latitude",
+                      "value": "37.5665",
+                      "type": "text"
+                    },
+                    {
+                      "key": "longitude",
+                      "value": "126.9780",
+                      "type": "text"
+                    }
+                  ]
+                },
+                "url": "{{BASE_URL}}/video/{{VIDEO_ID_3}}/upload"
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "6. Video 조회",
+          "item": [
+            {
+              "name": "6.1. Video 목록 조회",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{BASE_URL}}/video"
+              },
+              "response": []
+            },
+            {
+              "name": "6.2. 첫 번째 Video 상세 조회",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{BASE_URL}}/video/{{VIDEO_ID}}"
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "7. Video 수정",
+          "item": [
+            {
+              "name": "7.1. 첫 번째 Video 메타데이터 수정",
+              "request": {
+                "method": "PUT",
+                "header": [],
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "name",
+                      "value": "Entrance Cam Segment 1 (edited)",
+                      "type": "text"
+                    },
+                    {
+                      "key": "description",
+                      "value": "Updated description",
+                      "type": "text"
+                    },
+                    {
+                      "key": "start_at",
+                      "value": "2026-08-07T09:05:00",
+                      "type": "text"
+                    },
+                    {
+                      "key": "is_ptz",
+                      "value": "true",
+                      "type": "text"
+                    },
+                    {
+                      "key": "latitude",
+                      "value": "37.5665",
+                      "type": "text"
+                    },
+                    {
+                      "key": "longitude",
+                      "value": "126.9780",
+                      "type": "text"
+                    }
+                  ]
+                },
+                "url": "{{BASE_URL}}/video/{{VIDEO_ID}}"
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "8. Video 스트리밍 검증",
+          "item": [
+            {
+              "name": "8.1. 전체 Video 스트리밍",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test(\"Full video stream returned\", function () { pm.response.to.have.status(200); });",
+                      "pm.test(\"Server supports byte ranges\", function () { pm.expect(pm.response.headers.get(\"Accept-Ranges\")).to.eql(\"bytes\"); });",
+                      "pm.test(\"Video data exists\", function () { pm.expect(pm.response.responseSize).to.be.above(0); });",
+                      "pm.test(\"Content-Length matches response size\", function () { pm.expect(Number(pm.response.headers.get(\"Content-Length\"))).to.eql(pm.response.responseSize); });"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": "{{BASE_URL}}/video/{{VIDEO_ID}}/stream"
+              },
+              "response": []
+            },
+            {
+              "name": "8.2. Video 범위 스트리밍",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test(\"Partial video stream returned\", function () { pm.response.to.have.status(206); });",
+                      "pm.test(\"Server supports byte ranges\", function () { pm.expect(pm.response.headers.get(\"Accept-Ranges\")).to.eql(\"bytes\"); });",
+                      "pm.test(\"Requested range starts at zero\", function () { pm.expect(pm.response.headers.get(\"Content-Range\")).to.match(/^bytes 0-\\d+\\/\\d+$/); });",
+                      "pm.test(\"Range data exists and length matches\", function () { pm.expect(pm.response.responseSize).to.be.above(0); pm.expect(Number(pm.response.headers.get(\"Content-Length\"))).to.eql(pm.response.responseSize); });"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Range",
+                    "value": "bytes=0-1048575",
+                    "type": "text"
+                  }
+                ],
+                "url": "{{BASE_URL}}/video/{{VIDEO_ID}}/stream"
+              },
+              "response": []
+            },
+            {
+              "name": "8.3. Video suffix 범위 스트리밍",
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test(\"Suffix video stream returned\", function () { pm.response.to.have.status(206); });",
+                      "pm.test(\"Server supports byte ranges\", function () { pm.expect(pm.response.headers.get(\"Accept-Ranges\")).to.eql(\"bytes\"); });",
+                      "pm.test(\"Suffix range ends at the final byte\", function () { const match = pm.response.headers.get(\"Content-Range\").match(/^bytes (\\d+)-(\\d+)\\/(\\d+)$/); pm.expect(match).to.not.eql(null); pm.expect(Number(match[2])).to.eql(Number(match[3]) - 1); });",
+                      "pm.test(\"Suffix data exists and length matches\", function () { pm.expect(pm.response.responseSize).to.be.above(0); pm.expect(Number(pm.response.headers.get(\"Content-Length\"))).to.eql(pm.response.responseSize); });"
+                    ]
+                  }
+                }
+              ],
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Range",
+                    "value": "bytes=-1048576",
+                    "type": "text"
+                  }
+                ],
+                "url": "{{BASE_URL}}/video/{{VIDEO_ID}}/stream"
+              },
+              "response": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Analysis Queue 검증",
+      "description": "video_id를 기준으로 분석 작업을 큐에 등록하고 상태를 조회, 취소, 삭제하며 저장된 VLM 결과를 조회합니다. queued는 대기, running은 처리 중, succeeded는 완료, failed는 실패, cancelled는 취소 상태입니다.",
+      "item": [
+        {
+          "name": "1. 분석 작업을 큐에 등록",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Analysis enqueued\", function () { pm.response.to.have.status(201); });",
+                  "const response = pm.response.json();",
+                  "pm.test(\"Analysis is queued for the requested video\", function () { pm.expect(response.video_id).to.eql(Number(pm.collectionVariables.get(\"VIDEO_ID_2\"))); pm.expect(response.status).to.eql(\"queued\"); });",
+                  "pm.test(\"Internal analysis ID is hidden\", function () { pm.expect(response).to.not.have.property(\"id\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "description": "POST /analysis: video_id의 영상을 분석 큐에 등록합니다. 성공하면 queued 상태가 되며 worker가 순서대로 처리합니다. 같은 영상에 취소되지 않은 작업이 있으면 409를 반환합니다.",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"video_id\": {{VIDEO_ID_2}},\n  \"settings\": {\n    \"model\": \"anomaly-v1\",\n    \"threshold\": 0.7\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{BASE_URL}}/analysis"
+          },
+          "response": []
+        },
+        {
+          "name": "2. 전체 분석 큐 작업 조회",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"All analyses returned\", function () { pm.response.to.have.status(200); });",
+                  "const response = pm.response.json();",
+                  "pm.test(\"Response is an analysis list\", function () { pm.expect(response).to.be.an(\"array\"); pm.expect(response.some((analysis) => analysis.video_id === Number(pm.collectionVariables.get(\"VIDEO_ID_2\")))).to.eql(true); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "description": "GET /analysis: 분석 큐의 모든 작업과 현재 상태를 최신순으로 조회합니다.",
+            "method": "GET",
+            "header": [],
+            "url": "{{BASE_URL}}/analysis"
+          },
+          "response": []
+        },
+        {
+          "name": "3. video_id로 분석 큐 작업 목록 조회",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Video analyses returned\", function () { pm.response.to.have.status(200); });",
+                  "const response = pm.response.json();",
+                  "pm.test(\"Every analysis belongs to the video\", function () { pm.expect(response).to.be.an(\"array\"); pm.expect(response.every((analysis) => analysis.video_id === Number(pm.collectionVariables.get(\"VIDEO_ID_2\")))).to.eql(true); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "description": "GET /analysis?video_id=...: 지정한 영상에 등록된 분석 큐 작업만 조회합니다.",
+            "method": "GET",
+            "header": [],
+            "url": "{{BASE_URL}}/analysis?video_id={{VIDEO_ID_2}}"
+          },
+          "response": []
+        },
+        {
+          "name": "4. 상태별 분석 큐 작업 조회",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Queued analyses returned\", function () { pm.response.to.have.status(200); });",
+                  "const response = pm.response.json();",
+                  "pm.test(\"Every analysis is queued\", function () { pm.expect(response).to.be.an(\"array\"); pm.expect(response.every((analysis) => analysis.status === \"queued\")).to.eql(true); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "description": "GET /analysis?status=...: queued, running, succeeded, failed, cancelled 상태로 큐 작업을 필터링합니다.",
+            "method": "GET",
+            "header": [],
+            "url": "{{BASE_URL}}/analysis?status=queued"
+          },
+          "response": []
+        },
+        {
+          "name": "5. 분석 큐 작업 페이지 조회",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Paginated analyses returned\", function () { pm.response.to.have.status(200); });",
+                  "const response = pm.response.json();",
+                  "pm.test(\"Limit is applied\", function () { pm.expect(response).to.be.an(\"array\"); pm.expect(response.length).to.be.at.most(1); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "description": "GET /analysis?limit=...&offset=...: limit과 offset으로 분석 큐 목록을 나누어 조회합니다.",
+            "method": "GET",
+            "header": [],
+            "url": "{{BASE_URL}}/analysis?limit=1&offset=0"
+          },
+          "response": []
+        },
+        {
+          "name": "6. 중복 큐 등록 거부 확인",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Duplicate analysis rejected\", function () { pm.response.to.have.status(409); });",
+                  "const response = pm.response.json();",
+                  "pm.test(\"Current analysis state returned\", function () { pm.expect(response.video_id).to.eql(Number(pm.collectionVariables.get(\"VIDEO_ID_2\"))); pm.expect(response.status).to.eql(\"queued\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "description": "같은 영상에 취소되지 않은 분석 작업이 이미 있을 때 새 큐 작업을 만들지 않고 409를 반환하는지 확인합니다.",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"video_id\": {{VIDEO_ID_2}},\n  \"settings\": {\n    \"model\": \"anomaly-v1\",\n    \"threshold\": 0.8\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{BASE_URL}}/analysis"
+          },
+          "response": []
+        },
+        {
+          "name": "7. 영상의 최신 분석 큐 작업 조회",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Analysis returned\", function () { pm.response.to.have.status(200); });",
+                  "const response = pm.response.json();",
+                  "pm.test(\"Correct video analysis returned\", function () { pm.expect(response.video_id).to.eql(Number(pm.collectionVariables.get(\"VIDEO_ID_2\"))); pm.expect(response).to.not.have.property(\"id\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "description": "GET /analysis/{video_id}: 해당 영상에 가장 최근에 등록된 큐 작업의 상태, 처리 시각, 오류 정보를 조회합니다.",
+            "method": "GET",
+            "header": [],
+            "url": "{{BASE_URL}}/analysis/{{VIDEO_ID_2}}"
+          },
+          "response": []
+        },
+        {
+          "name": "8. 영상의 VLM 분석 결과 전체 조회",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Result endpoint responds according to availability\", function () { pm.expect(pm.response.code).to.be.oneOf([200, 404]); });",
+                  "const response = pm.response.json();",
+                  "if (pm.response.code === 200) {",
+                  "  pm.test(\"Correct video result returned\", function () { pm.expect(response.video_id).to.eql(Number(pm.collectionVariables.get(\"VIDEO_ID_2\"))); });",
+                  "  pm.test(\"Result response has metadata and VLM results\", function () { pm.expect(response).to.have.property(\"metadata\"); pm.expect(response.results).to.be.an(\"array\"); });",
+                  "  pm.test(\"VLM responses are parsed JSON values\", function () { response.results.forEach((result) => pm.expect(result.response).to.satisfy((value) => typeof value === \"object\" && value !== null)); });",
+                  "  if (response.status !== \"succeeded\") {",
+                  "    pm.test(\"Incomplete analysis includes warning\", function () { pm.expect(response.warning).to.be.a(\"string\").and.not.empty; });",
+                  "  }",
+                  "} else {",
+                  "  pm.test(\"Unavailable result returns detail\", function () { pm.expect(response.detail).to.be.a(\"string\").and.not.empty; });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "description": "GET /analysis/result/{video_id}/all: 분석 컨테이너를 거치지 않고 SQLite에서 VLM 결과를 직접 조회합니다. 분석 미완료 상태라도 데이터가 있으면 warning과 함께 반환합니다.",
+            "method": "GET",
+            "header": [],
+            "url": "{{BASE_URL}}/analysis/result/{{VIDEO_ID_2}}/all"
+          },
+          "response": []
+        },
+        {
+          "name": "9. 대기 또는 실행 중인 큐 작업 취소",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Analysis cancelled\", function () { pm.response.to.have.status(200); });",
+                  "const response = pm.response.json();",
+                  "pm.test(\"Analysis status is cancelled\", function () { pm.expect(response.video_id).to.eql(Number(pm.collectionVariables.get(\"VIDEO_ID_2\"))); pm.expect(response.status).to.eql(\"cancelled\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "description": "POST /analysis/{video_id}/cancel: 최신 큐 작업이 queued 또는 running이면 cancelled로 변경합니다. 레코드는 삭제하지 않습니다.",
+            "method": "POST",
+            "header": [],
+            "url": "{{BASE_URL}}/analysis/{{VIDEO_ID_2}}/cancel"
+          },
+          "response": []
+        },
+        {
+          "name": "10. 취소된 영상 분석을 다시 큐에 등록",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Cancelled analysis re-enqueued\", function () { pm.response.to.have.status(201); });",
+                  "const response = pm.response.json();",
+                  "pm.test(\"A new queued analysis was created\", function () { pm.expect(response.video_id).to.eql(Number(pm.collectionVariables.get(\"VIDEO_ID_2\"))); pm.expect(response.status).to.eql(\"queued\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "description": "취소된 작업이 있는 영상을 다시 분석 큐에 등록해 새로운 queued 작업을 생성합니다.",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"video_id\": {{VIDEO_ID_2}},\n  \"settings\": {\n    \"model\": \"anomaly-v1\",\n    \"threshold\": 0.9\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{BASE_URL}}/analysis"
+          },
+          "response": []
+        },
+        {
+          "name": "11. 최신 분석 작업을 큐에서 삭제",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Analysis deleted\", function () { pm.response.to.have.status(200); });",
+                  "const response = pm.response.json();",
+                  "pm.test(\"Correct analysis was deleted\", function () { pm.expect(response.deleted).to.eql(true); pm.expect(response.video_id).to.eql(Number(pm.collectionVariables.get(\"VIDEO_ID_2\"))); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "description": "DELETE /analysis/{video_id}: 최신 분석 큐 레코드를 영구 삭제하고 영상 분석 상태를 pending으로 되돌립니다. SQLite 결과 파일은 삭제하지 않습니다.",
+            "method": "DELETE",
+            "header": [],
+            "url": "{{BASE_URL}}/analysis/{{VIDEO_ID_2}}"
+          },
+          "response": []
+        },
+        {
+          "name": "12. 삭제된 큐 작업 조회 실패 확인",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Deleted analysis is not found\", function () { pm.response.to.have.status(404); });",
+                  "pm.test(\"Not-found detail returned\", function () { pm.expect(pm.response.json().detail).to.eql(\"Analysis job not found\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "description": "큐에서 삭제한 영상의 최신 분석 작업을 다시 조회했을 때 404를 반환하는지 확인합니다.",
+            "method": "GET",
+            "header": [],
+            "url": "{{BASE_URL}}/analysis/{{VIDEO_ID_2}}"
+          },
+          "response": []
+        },
+        {
+          "name": "13. 잘못된 큐 상태 필터 거부 확인",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Invalid status rejected\", function () { pm.response.to.have.status(400); });",
+                  "pm.test(\"Validation detail returned\", function () { pm.expect(pm.response.json().detail).to.include(\"Unsupported analysis status\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "description": "지원하지 않는 status 값을 전달했을 때 400을 반환하는지 확인합니다.",
+            "method": "GET",
+            "header": [],
+            "url": "{{BASE_URL}}/analysis?status=invalid"
+          },
+          "response": []
+        },
+        {
+          "name": "14. 존재하지 않는 영상의 큐 등록 거부 확인",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Missing video rejected\", function () { pm.response.to.have.status(404); });",
+                  "pm.test(\"Video not-found detail returned\", function () { pm.expect(pm.response.json().detail).to.eql(\"Video not found\"); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "description": "존재하지 않는 video_id를 분석 큐에 등록하려 할 때 404를 반환하는지 확인합니다.",
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"video_id\": 999999999,\n  \"settings\": {}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": "{{BASE_URL}}/analysis"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "5. 테스트 데이터 정리",
+      "description": "모든 Video 및 Analysis 검증이 끝난 뒤 생성한 리소스를 삭제합니다.",
+      "item": [
+        {
+          "name": "1. 첫 번째 Video 삭제",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{BASE_URL}}/video/{{VIDEO_ID_1}}"
+          },
+          "response": []
+        },
+        {
+          "name": "2. 두 번째 Video 삭제",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{BASE_URL}}/video/{{VIDEO_ID_2}}"
+          },
+          "response": []
+        },
+        {
+          "name": "3. 세 번째 Video 삭제",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{BASE_URL}}/video/{{VIDEO_ID_3}}"
+          },
+          "response": []
+        },
+        {
+          "name": "4. Site-A 테스트 그룹 삭제",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{BASE_URL}}/video/groups/{{GROUP_ID}}"
+          },
+          "response": []
+        },
+        {
+          "name": "5. Site-B 테스트 그룹 삭제",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{BASE_URL}}/video/groups/{{GROUP_ID_2}}"
+          },
+          "response": []
+        },
+        {
+          "name": "6. Site-C 테스트 그룹 삭제",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": "{{BASE_URL}}/video/groups/{{GROUP_ID_3}}"
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
