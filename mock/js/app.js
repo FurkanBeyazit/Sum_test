@@ -16,16 +16,12 @@ let CLEANUP = [];
 function onLeave(fn) { CLEANUP.push(fn); }
 function runCleanup() { CLEANUP.forEach(f => { try { f(); } catch {} }); CLEANUP = []; }
 
-const STATUS_KO = {
-  registered: '등록됨', uploading: '업로드 중', ready: '분석 가능',
-  analyzing: '분석 중', completed: '요약 완료', failed: '실패', deleted: '삭제됨',
+const STATUS_LABEL = {
+  registered: 'Registered', uploading: 'Uploading', ready: 'Ready',
+  analyzing: 'Analyzing', completed: 'Completed', failed: 'Failed',
+  deleted: 'Deleted',
 };
-const STATUS_TR = {
-  registered: 'Kayıtlı', uploading: 'Yükleniyor', ready: 'Hazır',
-  analyzing: 'Analiz ediliyor', completed: 'Tamamlandı', failed: 'Hata',
-  deleted: 'Silindi',
-};
-const statusLabel = s => (store.get('lang') === 'tr' ? STATUS_TR : STATUS_KO)[s] || s;
+const statusLabel = s => STATUS_LABEL[s] || s;
 const SRC_ICON = { file: '▤', rtsp: '⦿', uploaded: '↑', archive: '▣' };
 
 /* ==========================================================================
@@ -72,7 +68,7 @@ function topbar(active) {
       [['mock', 'MOCK'], ['live', 'LIVE']].map(([m, label]) => el('button', {
         class: API_MODE === m ? 'on' : '',
         title: m === 'live'
-          ? `Gerçek API: ${'http://172.20.14.161:8001'}`
+          ? `Live API: ${'http://172.20.14.161:8001'}`
           : 'Yerel mock veri',
         onclick: () => {
           if (API_MODE === m) return;
@@ -83,7 +79,7 @@ function topbar(active) {
         },
       }, label))),
     el('div.row', { class: 'tiny muted' },
-      el('span', { id: 'srvstat' }, '● 연결됨')),
+      el('span', { id: 'srvstat' }, '● Connected')),
     el('button.iconbtn', {
       title: 'Settings', onclick: () => location.hash = '#/settings',
     }, '⚙'),
@@ -104,7 +100,7 @@ function treePanel(activeVideoId, onPick) {
     el('div', { style: { padding: '8px 9px' } },
       el('div.search-wrap', {},
         el('input.input', {
-          placeholder: '그룹 검색', oninput: (e) => filter(e.target.value),
+          placeholder: 'Search groups', oninput: (e) => filter(e.target.value),
         }),
         el('span.ico', {}, '⌕'))),
     body);
@@ -154,7 +150,7 @@ function treePanel(activeVideoId, onPick) {
           el('span.pl', {}, c.place_ko || ''));
         row.onclick = () => {
           if (!usable) {
-            toast(c.error ? c.error : `${c.name}: ${statusLabel(c.status)} — 요약 결과가 없습니다.`,
+            toast(c.error ? c.error : `${c.name}: ${statusLabel(c.status)} — no analysis result yet.`,
               c.status === 'failed' ? 'err' : 'warn', 4200);
             return;
           }
@@ -201,14 +197,14 @@ function filterPanel(onApply) {
       if (which === 'person' && f.cls === '' &&
         ['upper_type', 'lower_color', 'hat'].includes(d.key)) continue;
       const g = el('div.fgroup', {},
-        el('div.flabel', {}, store.get('lang') === 'tr' ? d.label_tr : d.label_ko));
+        el('div.flabel', {}, d.label_ko));
       if (d.type === 'color') {
         const sel = f[d.key] || (f[d.key] = []);
         g.append(el('div.swatches', {},
           d.values.map(v => el('button.sw', {
             class: sel.includes(v.v) ? 'on' : '',
             style: { background: v.hex },
-            title: store.get('lang') === 'tr' ? v.tr : v.ko,
+            title: v.ko,
             onclick: (e) => {
               const i = sel.indexOf(v.v);
               i >= 0 ? sel.splice(i, 1) : sel.push(v.v);
@@ -227,7 +223,7 @@ function filterPanel(onApply) {
             i >= 0 ? sel.splice(i, 1) : sel.push(v.v);
             e.target.classList.toggle('on');
           },
-        }, store.get('lang') === 'tr' ? v.tr : v.ko))));
+        }, v.ko))));
       } else {
         g.append(el('div.seg', {},
           [{ v: '', ko: t('all'), tr: t('all') }, ...d.values].map(v =>
@@ -238,7 +234,7 @@ function filterPanel(onApply) {
                 [...e.target.parentElement.children].forEach(b => b.classList.remove('on'));
                 e.target.classList.add('on');
               },
-            }, store.get('lang') === 'tr' ? (v.tr || v.ko) : v.ko))));
+            }, v.ko))));
       }
       dyn.append(g);
     }
@@ -261,7 +257,7 @@ function filterPanel(onApply) {
   return el('div.panel', {},
     el('div.panel-h', {}, t('objectFilter'),
       el('span.grow'),
-      el('span', { class: 'tiny muted', title: 'PAR 모델 출력 기반' }, 'PAR')),
+      el('span', { class: 'tiny muted', title: 'Based on PAR model output' }, 'PAR')),
     el('div.panel-b', {}, body));
 }
 
@@ -304,7 +300,7 @@ function screenLogin() {
 
 async function screenSingle(videoId) {
   const cam = findCam(videoId);
-  if (!cam) { toast('영상을 찾을 수 없습니다: ' + videoId, 'err'); location.hash = '#/single/CAM01'; return; }
+  if (!cam) { toast('Video not found: ' + videoId, 'err'); location.hash = '#/single/CAM01'; return; }
 
   const stage = el('div.stage');
   const rightbar = el('div.rightbar');
@@ -336,7 +332,7 @@ async function screenSingle(videoId) {
       el('button.btn.ghost.sm', { onclick: () => showVideoInfo(video, summary) }, t('videoInfo')),
       el('button.btn.sm', { onclick: () => reSummarize(video) }, '⟲ ' + t('reSummarize'))),
     el('div.hdr-sub', {},
-      el('span', {}, '요약 시간 범위'),
+      el('span', {}, 'Time range'),
       el('b', { class: 'mono' },
         `${dateOf(video.start_time)} ${clockOf(video.start_time)} ~ ${clockOf(video.end_time)}`),
       el('span', { class: 'muted' }, '·'),
@@ -347,9 +343,9 @@ async function screenSingle(videoId) {
         video.width && video.height ? `${video.width}×${video.height}` : null,
         video.fps ? `${video.fps}fps` : null,
         video.codec ? String(video.codec).toUpperCase() : null,
-      ].filter(Boolean).join(' · ') || '해상도 정보 없음'),
+      ].filter(Boolean).join(' · ') || 'No resolution info'),
       el('span', { class: 'muted' }, '·'),
-      el('span', { title: 'node_id / channel — VMS 식별자' },
+      el('span', { title: 'node_id / channel — VMS identifier' },
         `node ${video.node_id}/ch${video.ch}`)));
 
   // -------- video --------------------------------------------------------
@@ -361,7 +357,7 @@ async function screenSingle(videoId) {
   const hud = el('div.vhud', {},
     el('span.pill', {}, el('b', { id: 'hudclock' }, '--:--:--')),
     el('span.pill', { id: 'hudobj' }, 'obj 0'),
-    el('span.pill', { id: 'hudsrc', title: '오리지널/요약 전환' }, '원본'));
+    el('span.pill', { id: 'hudsrc', title: 'Original / summary toggle' }, 'Original'));
 
   /* `playable`: proxy VAR ya da kaynak zaten tarayıcının açabildiği bir
      MP4/H.264 — o durumda backend stream'i doğrudan oynatılır. Mock verisinde
@@ -377,26 +373,26 @@ async function screenSingle(videoId) {
   } else {
     vstack.append(el('div.noproxy', {},
       el('div', { class: 'big' }, '⛶'),
-      el('div', { class: 't' }, '재생 가능한 프록시 영상이 없습니다'),
+      el('div', { class: 't' }, 'No playable proxy for this video'),
       el('div', { class: 'tiny' },
-        `이 영상(${video.duration >= 3600 ? dur(video.duration) : video.duration + 's'})은 `
-        + `분석은 완료되었지만 브라우저 재생용 H.264 프록시가 생성되지 않았습니다.`),
+        `This video (${video.duration >= 3600 ? dur(video.duration) : video.duration + 's'}) `
+        + 'was analyzed, but no browser-playable H.264 proxy was generated.'),
       el('div', {
         class: 'tiny', style: {
           marginTop: '6px', color: 'var(--tx-3)', textAlign: 'left',
           lineHeight: 1.7,
         },
       },
-        el('div', {}, `원본 코덱: ${(video.src_codec || '').toUpperCase()} `
-          + `→ Chrome 재생 불가 가능성 있음`),
-        el('div', {}, `faststart: ${video.faststart ? '✓' : '✗ (moov atom 파일 끝)'}`),
+        el('div', {}, `Source codec: ${(video.src_codec || '').toUpperCase()} `
+          + '→ Chrome may not be able to play it'),
+        el('div', {}, `faststart: ${video.faststart ? '✓' : '✗ (moov atom at end of file)'}`),
         /* gop_sec yalnızca proxy üretilmişse biliniyor; proxy yoksa null
            gelir ve "GOP: nulls" yazıyordu. */
         video.gop_sec != null
-          ? el('div', {}, `GOP: ${video.gop_sec}s → seek 정확도 ±${video.gop_sec}s`)
-          : el('div', {}, 'GOP: 알 수 없음 (프록시 미생성)')),
+          ? el('div', {}, `GOP: ${video.gop_sec}s → seek accuracy ±${video.gop_sec}s`)
+          : el('div', {}, 'GOP: unknown (no proxy)')),
       el('div', { class: 'tiny', style: { marginTop: '10px' } },
-        '타임라인과 이벤트 목록은 정상 동작합니다.')));
+        'The timeline and event list still work.')));
   }
   vwell.append(hud);
 
@@ -405,13 +401,13 @@ async function screenSingle(videoId) {
     el('div.track', {}, el('div.buf'), el('div.fill')),
     el('div.knob'));
   const tcode = el('div.tcode', {}, el('b', {}, '00:00:00'), ' / ', hms(video.duration));
-  const btnPlay = el('button.iconbtn', { title: '재생/일시정지' }, '▶');
+  const btnPlay = el('button.iconbtn', { title: 'Play / pause' }, '▶');
   const vctl = el('div.vctl', {},
     btnPlay,
-    el('button.iconbtn', { title: '10초 뒤로', onclick: () => seek(cur() - 10) }, '⟲'),
-    el('button.iconbtn', { title: '10초 앞으로', onclick: () => seek(cur() + 10) }, '⟳'),
-    el('button.iconbtn', { title: '이전 이벤트', onclick: () => jumpEvent(-1) }, '⏮'),
-    el('button.iconbtn', { title: '다음 이벤트', onclick: () => jumpEvent(1) }, '⏭'),
+    el('button.iconbtn', { title: 'Back 10s', onclick: () => seek(cur() - 10) }, '⟲'),
+    el('button.iconbtn', { title: 'Forward 10s', onclick: () => seek(cur() + 10) }, '⟳'),
+    el('button.iconbtn', { title: 'Previous event', onclick: () => jumpEvent(-1) }, '⏮'),
+    el('button.iconbtn', { title: 'Next event', onclick: () => jumpEvent(1) }, '⏭'),
     tcode,
     scrub,
     el('select.select', {
@@ -419,36 +415,36 @@ async function screenSingle(videoId) {
       onchange: (e) => { if (videoEl) videoEl.playbackRate = +e.target.value; },
     }, [0.25, 0.5, 1, 2, 4].map(v =>
       el('option', { value: v, selected: v === 1 }, v + '×'))),
-    el('button.iconbtn', {
-      title: 'BBox 표시', class: 'on', id: 'btnbox',
+    /* Bindirme anahtarları detection verisine bağlı; gerçek API o veriyi
+       vermediği için canlıda hepsi ölü düğmeydi (FEATURES.bbox). */
+    FEATURES.bbox ? el('button.iconbtn', {
+      title: 'BBox', class: 'on', id: 'btnbox',
       onclick: (e) => {
         const on = e.currentTarget.classList.toggle('on');
         if (overlay) { overlay.opts.boxes = on; overlay.draw(cur()); }
       },
-    }, '▭'),
-    el('button.iconbtn', {
-      title: '이동 궤적', class: 'on',
+    }, '▭') : null,
+    FEATURES.bbox ? el('button.iconbtn', {
+      title: 'Tracks', class: 'on',
       onclick: (e) => {
         const on = e.currentTarget.classList.toggle('on');
         if (overlay) { overlay.opts.trails = on; overlay.draw(cur()); }
       },
-    }, '⌇'),
-    el('button.iconbtn', {
-      title: '레이블', class: 'on',
+    }, '⌇') : null,
+    FEATURES.bbox ? el('button.iconbtn', {
+      title: 'Labels', class: 'on',
       onclick: (e) => {
         const on = e.currentTarget.classList.toggle('on');
         if (overlay) { overlay.opts.labels = on; overlay.draw(cur()); }
       },
-    }, 'A'),
-    el('button.iconbtn', { title: '스냅샷', onclick: snapshot }, '📷'),
+    }, 'A') : null,
+    FEATURES.snapshot
+      ? el('button.iconbtn', { title: 'Snapshot', onclick: snapshot }, '📷')
+      : null,
     el('button.iconbtn', {
-      title: '전체화면',
+      title: 'Fullscreen',
       onclick: () => vwell.requestFullscreen?.(),
-    }, '⛶'),
-    el('button.btn.sm.ghost', {
-      onclick: () => toast('원본 영상 재생 — 요약/원본 전환 지점: '
-        + TM.wallFull(cur()), 'info'),
-    }, t('viewOriginal')));
+    }, '⛶'));
 
   const videobox = el('div.videobox', {}, vwell, canPlay ? vctl : null);
 
@@ -471,18 +467,19 @@ async function screenSingle(videoId) {
   const tlPanel = el('div.panel.tlwrap', {},
     el('div.tlbar', {},
       el('span', { class: 'tiny', style: { fontWeight: 700, color: 'var(--tx-1)' } },
-        '이벤트 타임라인'),
+        'Event timeline'),
       el('span.grow'),
-      el('span', { class: 'tiny muted' }, '휠=확대 · Shift+드래그=이동 · 더블클릭=전체'),
-      el('button.btn.sm.ghost', {
-        title: '이벤트 후보 구간 선정 근거',
+      el('span', { class: 'tiny muted' },
+        'Wheel = zoom · Shift+drag = pan · Double-click = fit'),
+      FEATURES.candidateScore ? el('button.btn.sm.ghost', {
+        title: 'Why these ranges were sent to the VLM',
         onclick: () => showCandidates(candData, TM),
-      }, '◍ 후보 점수'),
-      el('button.btn.sm.ghost', { onclick: () => { TL.fit(); } }, '⤢')),
+      }, '◍ Candidate score') : null,
+      el('button.btn.sm.ghost', { title: 'Fit', onclick: () => { TL.fit(); } }, '⤢')),
     tlCanvas,
-    el('div.tlhint', {},
-      '상단 파란 띠 = 이벤트 후보 점수 (규칙 기반). '
-      + '임계값을 넘은 구간만 VLM 분석 대상이 됩니다.'));
+    FEATURES.candidateScore ? el('div.tlhint', {},
+      'Blue band = rule-based candidate score. '
+      + 'Only ranges above the threshold are analyzed by the VLM.') : null);
 
   // -------- özet bilgi ---------------------------------------------------
   const statbox = el('div.panel', {},
@@ -497,9 +494,9 @@ async function screenSingle(videoId) {
          bakıldı. VLM sabit aralıkla örnekleme yaptığı için bu oran 1'in
          çok altında ve operatörün bilmesi gereken bir gerçek. */
       summary.sampling
-        ? stat('분석 구간',
-          `${summary.segments.length}개 · ${summary.sampling.duration}초씩`,
-          `커버리지 ${Math.round(
+        ? stat('Analyzed ranges',
+          `${summary.segments.length} × ${summary.sampling.duration}s`,
+          `coverage ${Math.round(
             (summary.segments.length * summary.sampling.duration)
             / (summary.duration || 1) * 100)}%`)
         : stat(t('summaryLength'), hms(summary.summary_duration),
@@ -537,7 +534,7 @@ async function screenSingle(videoId) {
 
   // -------- sağ panel: arama + olaylar -----------------------------------
   const promptInput = el('input.input', {
-    placeholder: '이벤트 검색 (예: 탑승, 쓰러진, 배회, kırmızı)',
+    placeholder: 'Search events',
     onkeydown: e => { if (e.key === 'Enter') doSearch(); },
   });
   const searchState = el('div.searchstate', { style: { display: 'none' } });
@@ -545,10 +542,12 @@ async function screenSingle(videoId) {
   const evPanel = el('div.panel', {},
     el('div.panel-h', {}, t('eventFlow'),
       el('span.grow'),
-      el('span', { class: 'tiny muted', id: 'evcount' }, `${events.length}건`)),
-    el('div.promptbar', {},
+      el('span', { class: 'tiny muted', id: 'evcount' }, `${events.length}`)),
+    /* Arama backend'de yok; istemci içi metin eşleşmesi VLM açıklamaları
+       kısa olduğu için pratikte hiçbir şey bulmuyordu (FEATURES.eventSearch). */
+    FEATURES.eventSearch ? el('div.promptbar', {},
       promptInput,
-      el('button.btn.pri.sm', { onclick: () => doSearch() }, '⌕')),
+      el('button.btn.pri.sm', { onclick: () => doSearch() }, '⌕')) : null,
     searchState,
     evBody,
     el('div', { style: { padding: '8px', borderTop: '1px solid var(--line-soft)' } },
@@ -569,11 +568,15 @@ async function screenSingle(videoId) {
    *  VLM'in ürettiği her olay "candidate"; operatör onaylar ya da oto-tanı
    *  olarak eler. Raporlama yalnızca confirmed olayları alır. */
   function statusRow(e) {
+    /* Onay akışı gerçek API'de kalıcı DEĞİL — `eventStatus` sonucu yalnızca
+       bellekte duruyor, sayfa yenilenince kayboluyor. Kalıcı olmayan bir
+       onay düğmesi göstermek yanıltıcı, o yüzden şimdilik kapalı. */
+    if (!FEATURES.eventStatus) return null;
     const st = e.status || 'candidate';
     const LBL = {
-      candidate: ['후보', 'var(--tx-2)'],
-      confirmed: ['✓ 확정', 'var(--ok)'],
-      dismissed: ['✕ 오탐', 'var(--tx-3)'],
+      candidate: ['Candidate', 'var(--tx-2)'],
+      confirmed: ['✓ Confirmed', 'var(--ok)'],
+      dismissed: ['✕ False positive', 'var(--tx-3)'],
     };
     const badge = el('span.evtag', {
       style: { color: LBL[st][1], background: 'rgba(255,255,255,.05)' },
@@ -583,7 +586,7 @@ async function screenSingle(videoId) {
       const upd = await api.eventStatus(e.id, next);
       e.status = upd.status;
       renderEvents(currentList, store.get('activeEventId'));
-      toast(next === 'confirmed' ? '이벤트 확정됨' : '오탐으로 제외됨',
+      toast(next === 'confirmed' ? 'Event confirmed' : 'Marked as false positive',
         next === 'confirmed' ? 'ok' : 'warn', 1800);
     };
     return el('div.evmeta', { style: { marginTop: '5px' } }, badge,
@@ -591,17 +594,17 @@ async function screenSingle(videoId) {
         ? el('button.btn.sm.ghost', {
           style: { padding: '1px 7px', fontSize: '10px' },
           onclick: (ev) => set('confirmed', ev),
-        }, '확정') : null,
+        }, 'Confirm') : null,
       st !== 'dismissed'
         ? el('button.btn.sm.ghost', {
           style: { padding: '1px 7px', fontSize: '10px' },
           onclick: (ev) => set('dismissed', ev),
-        }, '오탐') : null,
+        }, 'Reject') : null,
       st !== 'candidate'
         ? el('button.btn.sm.ghost', {
           style: { padding: '1px 7px', fontSize: '10px' },
           onclick: (ev) => set('candidate', ev),
-        }, '되돌리기') : null);
+        }, 'Undo') : null);
   }
 
   function renderEvents(list, active) {
@@ -619,18 +622,18 @@ async function screenSingle(videoId) {
         : null;
       wrap.append(el('div.empty', {},
         el('span', { class: 'big' }, '⌕'),
-        el('div', {}, '이벤트가 없습니다'),
+        el('div', {}, 'No events'),
         s ? el('div', {
           class: 'tiny muted',
           style: { marginTop: '6px', lineHeight: 1.6, maxWidth: '260px' },
         },
-          `VLM ${summary.segments.length}개 구간(${s.duration}초씩)만 봤습니다`
-          + ` — 영상의 ${cov}%.`,
+          `The VLM looked at only ${summary.segments.length} range(s) of `
+          + `${s.duration}s — ${cov}% of the video.`,
           el('br'),
-          `나머지 ${100 - cov}%는 분석되지 않았습니다.`,
+          `The remaining ${100 - cov}% was never analyzed.`,
           el('br'),
-          `더 촘촘히 보려면 vlm_segment_interval_seconds를 낮추세요`
-          + ` (현재 ${s.interval}초).`) : null));
+          'To sample more densely, lower vlm_segment_interval_seconds '
+          + `(currently ${s.interval}s).`) : null));
     }
     for (const e of list) {
       const item = el('div.evitem', {
@@ -642,15 +645,23 @@ async function screenSingle(videoId) {
         el('div.rail'),
         el('div.bullet', { style: { background: e.color, color: e.color } }),
         el('div.evbody', {},
-          el('div.evtime', {}, TM.wallClock(e.t_start),
+          /* Birincil zaman = videodaki konum (oynatıcı ve eksenle aynı dil).
+             Duvar saati kayboluyor değil: kayıt saati biliniyorsa hemen
+             yanında soluk duruyor, "olay gerçekte saat kaçtaydı" hâlâ
+             cevaplanabilsin diye. */
+          el('div.evtime', {}, hms(e.t_start),
             el('span', { class: 'muted', style: { fontWeight: 400 } },
-              ` +${ms(e.t_end - e.t_start)}`)),
-          el('div.evdesc', {},
-            store.get('lang') === 'tr' && e.description_en
-              ? e.description_en : e.description),
+              ` +${ms(e.t_end - e.t_start)}`),
+            video.start_time
+              ? el('span', {
+                class: 'muted', style: { fontWeight: 400, marginLeft: '6px' },
+                title: 'Wall-clock time of this event',
+              }, `· ${TM.wallClock(e.t_start)}`)
+              : null),
+          el('div.evdesc', {}, e.description),
           el('div.evmeta', {},
             el('span.evtag', { style: { color: e.color } },
-              store.get('lang') === 'tr' ? e.type_tr : e.type_ko),
+              e.type_ko),
             el('span', { class: 'tiny muted mono' }, (e.score * 100).toFixed(0) + '%'),
             e.severity === 'critical'
               ? el('span.evtag', { style: { background: 'rgba(239,68,68,.2)', color: '#fca5a5' } }, '⚠')
@@ -658,7 +669,7 @@ async function screenSingle(videoId) {
             e.event_group_code
               ? el('span.evtag', {
                 style: { background: 'rgba(99,102,241,.18)', color: '#a5b4fc' },
-                title: '동일 사건 그룹: ' + (e.event_group_title || ''),
+                title: 'Same incident group: ' + (e.event_group_title || ''),
               }, '⛓ ' + e.event_group_code)
               : null,
             e.vlm_model ? el('span', { class: 'tiny', style: { color: 'var(--tx-3)' } },
@@ -694,7 +705,7 @@ async function screenSingle(videoId) {
       ? sorted.find(e => e.t_start > c + .3)
       : [...sorted].reverse().find(e => e.t_start < c - .3);
     if (next) selectEvent(next);
-    else toast(dir > 0 ? '마지막 이벤트입니다' : '첫 이벤트입니다', 'info', 1600);
+    else toast(dir > 0 ? 'Last event' : 'First event', 'info', 1600);
   }
 
   function seek(tSec) {
@@ -706,13 +717,17 @@ async function screenSingle(videoId) {
     syncTime(tt);
   }
 
+  /* Oynatıcı GEÇEN SÜREYİ gösterir (00:00 → süre), duvar saatini değil.
+     Bir oynatıcı kaydın 13:54'te çekilmiş olmasından bağımsız olarak sıfırdan
+     sayar. Duvar saati bilgisi kaybolmuyor: başlıktaki "Time range" satırında
+     ve olay özetlerinde duruyor. */
   function syncTime(tt) {
-    tcode.firstChild.textContent = TM.wallClock(tt);
+    tcode.firstChild.textContent = hms(tt);
     const f = tt / video.duration;
     scrub.querySelector('.fill').style.width = (f * 100) + '%';
     scrub.querySelector('.knob').style.left = (f * 100) + '%';
     const hc = document.getElementById('hudclock');
-    if (hc) hc.textContent = TM.wallFull(tt);
+    if (hc) hc.textContent = hms(tt);
     const ho = document.getElementById('hudobj');
     if (ho && overlay) ho.textContent = 'obj ' + overlay.boxesAt(tt).length;
   }
@@ -735,9 +750,9 @@ async function screenSingle(videoId) {
     c.toBlob(b => {
       const a = document.createElement('a');
       a.href = URL.createObjectURL(b);
-      a.download = `${videoId}_${TM.wallClock(cur()).replace(/:/g, '')}.png`;
+      a.download = `${videoId}_${hms(cur()).replace(/:/g, '')}.png`;
       a.click();
-      toast('스냅샷 저장됨 (BBox 포함)', 'ok');
+      toast('Snapshot saved (with bounding boxes)', 'ok');
     });
   }
 
@@ -750,7 +765,10 @@ async function screenSingle(videoId) {
   onLeave(() => TL.destroy());
   TL.setData({
     lanes: [{ id: videoId, label: video.name, events }],
-    total: video.duration, startIso: video.start_time,
+    /* startIso VERİLMİYOR: tek video ekseninde eksen 00:00'dan başlar.
+       (Çoklu kamera ekranında duvar saati şart — kameraları hizalamanın
+       başka yolu yok — orada startIso hâlâ geçiliyor.) */
+    total: video.duration, startIso: null,
     heat: candHeat, heatThreshold: candData ? candData.threshold : null,
   });
 
@@ -792,7 +810,7 @@ async function screenSingle(videoId) {
     for (const e of events) {
       scrub.append(el('div.evmark', {
         style: { left: (e.t_start / video.duration * 100) + '%', background: e.color },
-        title: `${TM.wallClock(e.t_start)} ${e.description}`,
+        title: `${hms(e.t_start)} ${e.description}`,
       }));
     }
     scrub.onclick = (ev) => {
@@ -834,10 +852,10 @@ async function screenSingle(videoId) {
       : events;
     currentList = filtered;
     renderEvents(filtered, store.get('activeEventId'));
-    document.getElementById('evcount').textContent = `${filtered.length}건`;
+    document.getElementById('evcount').textContent = `${filtered.length}`;
     TL.setData({ lanes: [{ id: videoId, label: video.name, events: filtered }],
                  heat: candHeat });
-    toast(`필터 적용: 객체 ${r.total}건 · 이벤트 ${filtered.length}건`, 'ok');
+    toast(`Filter applied: ${r.total} objects · ${filtered.length} events`, 'ok');
   }
 
   // ---- 이벤트 검색: VLM açıklamalarında metin filtresi --------------------
@@ -850,42 +868,42 @@ async function screenSingle(videoId) {
       searchState.style.display = 'none';
       renderEvents(events, null);
       TL.setData({ lanes: [{ id: videoId, label: video.name, events }], heat: candHeat });
-      document.getElementById('evcount').textContent = `${events.length}건`;
+      document.getElementById('evcount').textContent = `${events.length}`;
       return;
     }
     searchState.style.display = '';
     mount(searchState, el('div', { class: 'tiny muted' },
-      el('span.spinner'), ' 검색 중…'));
+      el('span.spinner'), ' Searching…'));
 
     let r;
     try {
       r = await api.search({ video_ids: [videoId], query, limit: 60 });
-    } catch (e) { toast('검색 실패: ' + e.message, 'err'); return; }
+    } catch (e) { toast('Search failed: ' + e.message, 'err'); return; }
 
     mount(searchState,
       el('div.row', { style: { gap: '6px' } },
-        el('span.pstep.done', {}, '이벤트 검색'),
+        el('span.pstep.done', {}, 'Event search'),
         el('span', { class: 'tiny muted' },
-          `${r.events_scanned}건 스캔 · ${r.latency_ms}ms · ${r.total}건 일치`)),
+          `${r.events_scanned} scanned · ${r.latency_ms}ms · ${r.total} matched`)),
       el('div.wordchips', {},
         r.expanded_terms.slice(0, 12).map(w => el('span.wordchip', {}, w))),
       el('div', { class: 'tiny', style: { color: 'var(--tx-3)' } },
-        'VLM 서술 텍스트 기준 검색'));
+        'Searches the VLM description text'));
 
     currentList = r.items;
     renderEvents(r.items, null);
     document.getElementById('evcount').textContent =
-      `${r.total}건 / 전체 ${events.length}`;
+      `${r.total} / ${events.length}`;
     TL.setData({
       lanes: [{ id: videoId, label: video.name, events: r.items }],
       heat: candHeat,
     });
-    if (!r.total) toast(`"${query}" için sonuç yok — VLM bu kelimeden bahsetmemiş olabilir`, 'warn', 4200);
+    if (!r.total) toast(`No match for "${query}" — the VLM may not have mentioned it`, 'warn', 4200);
   }
 
   async function reSummarize(v) {
     const promptBox = el('textarea.textarea', {
-      placeholder: '분석 프롬프트 (선택) — 비워두면 일반 요약',
+      placeholder: 'Analysis prompt (optional) — blank means a general summary',
     });
     const ratio = el('input.input', { type: 'number', value: 3, min: 1, max: 30 });
     const s = summary.sampling;
@@ -894,22 +912,23 @@ async function screenSingle(videoId) {
                    / (summary.duration || 1) * 100)
       : null;
     const close = modal({
-      title: '재요약 — ' + v.name,
+      title: 'Re-analyze — ' + v.name,
       body: el('div.col', { style: { gap: '12px' } },
         el('div', { class: 'tiny muted' },
-          '재요약은 GPU 작업입니다. 기존 결과는 완료될 때까지 유지됩니다.'),
-        el('div.field', {}, el('label', {}, '분석 프롬프트'), promptBox),
+          'Re-analysis runs on the GPU. Existing results are kept until it finishes.'),
+        el('div.field', {}, el('label', {}, 'Analysis prompt'), promptBox),
         /* target_ratio LIVE modda hiçbir yere gitmiyor — live.js analyze()
            yalnızca prompt ve model'i settings'e koyuyor. Mock'ta anlamlı
            olduğu için duruyor, ama gerçek modda olduğu gibi işaretliyoruz. */
         API_MODE === 'live' ? null
-          : el('div.field', {}, el('label', {}, '목표 요약 비율 (%)'), ratio),
+          : el('div.field', {}, el('label', {}, 'Target summary ratio (%)'), ratio),
         /* Asıl kaldıraç bu: prompt'u değiştirmek örnekleme aralığını
            değiştirmez. Video büyük ölçüde hiç bakılmadan kalıyorsa yeni
            prompt da aynı "특이사항 없음"u üretir — bunu peşinen söylüyoruz. */
         cov ? el('div', { class: 'tiny', style: { color: '#fbbf24' } },
-          `현재 VLM 커버리지 ${cov}% — ${cov}%만 보고 답합니다. `
-          + '프롬프트를 바꿔도 나머지 구간은 여전히 분석되지 않습니다.') : null,
+          `Current VLM coverage is ${cov}% — the answer is based on that `
+          + 'much of the video only. Changing the prompt does not make the '
+          + 'remaining ranges get analyzed.') : null,
         el('div', { class: 'codeblock' },
           API_MODE === 'live'
             ? `POST /analysis\n{ "video_id": ${v.id}, "settings": { "prompt": "..." } }`
@@ -959,15 +978,15 @@ function watchJob(jobId, label, videoId) {
     route();
   };
   const bar = el('div.progline', {}, el('i', { style: { width: '0%' } }));
-  const txt = el('div', { class: 'tiny muted' }, '대기 중…');
+  const txt = el('div', { class: 'tiny muted' }, 'Queued…');
   const host = el('div.toast', { class: 'ok', style: { minWidth: '300px' } },
     el('div', { style: { flex: 1 } },
       el('div', { style: { fontWeight: 700, marginBottom: '5px' } },
-        '⟲ ' + label + ' 재요약'),
+        '⟲ Re-analyzing ' + label),
       bar, txt),
     el('button.btn.sm.ghost', {
-      onclick: async () => { await api.jobCancel(jobId); host.remove(); toast('작업 취소됨', 'warn'); },
-    }, '중지'));
+      onclick: async () => { await api.jobCancel(jobId); host.remove(); toast('Job canceled', 'warn'); },
+    }, 'Stop'));
   let h = document.getElementById('toasts');
   if (!h) { h = el('div#toasts'); document.body.append(h); }
   h.append(host);
@@ -982,8 +1001,8 @@ function watchJob(jobId, label, videoId) {
     const stop = listen(url, (m) => {
       bar.firstChild.style.width = (m.progress || 0) + '%';
       txt.textContent = `${m.stage_label || m.stage} · ${(m.progress || 0).toFixed(0)}%`
-        + (m.eta_sec ? ` · 남은 ${Math.round(m.eta_sec)}s` : '');
-      if (m.status === 'completed') { stop(); done('재요약 완료', 'ok'); refresh(); }
+        + (m.eta_sec ? ` · ${Math.round(m.eta_sec)}s left` : '');
+      if (m.status === 'completed') { stop(); done('Re-analysis complete', 'ok'); refresh(); }
       if (m.status === 'canceled') { stop(); host.remove(); }
     }, 'progress');
     return;
@@ -1004,17 +1023,17 @@ function watchJob(jobId, label, videoId) {
       try { j = await api.job(jobId); } catch { continue; }
       const st = (j.status || '').toLowerCase();
       if (st === 'running') {
-        txt.textContent = `${j.worker_id || 'worker'} · 분석 중 (진행률 미제공)`;
+        txt.textContent = `${j.worker_id || 'worker'} · analyzing (no progress reported)`;
       } else if (st === 'queued') {
-        txt.textContent = '대기 중…';
+        txt.textContent = 'Queued…';
       } else if (st === 'succeeded') {
         bar.firstChild.classList.remove('indet');
         bar.firstChild.style.width = '100%';
-        done('재요약 완료', 'ok');
+        done('Re-analysis complete', 'ok');
         refresh();
         return;
       } else if (st === 'failed') {
-        return done('분석 실패: ' + (j.last_error || ''), 'err');
+        return done('Analysis failed: ' + (j.last_error || ''), 'err');
       } else if (st === 'cancelled' || st === 'canceled') {
         host.remove(); return;
       }
@@ -1033,28 +1052,29 @@ function showVideoInfo(v, s) {
     ['start_time', v.start_time], ['end_time', v.end_time],
     ['duration', `${v.duration}s (${hms(v.duration)})`],
     ['resolution', `${v.width} × ${v.height}`], ['fps', v.fps],
-    ['codec (proxy)', v.codec], ['codec (원본)', v.src_codec],
+    ['codec (proxy)', v.codec], ['codec (source)', v.src_codec],
     ['bitrate', v.bitrate_kbps + ' kbps'], ['file_size', bytes(v.file_size_mb)],
     ['GOP', v.gop_sec + 's'], ['faststart', v.faststart ? '✓' : '✗'],
-    ['proxy 재생', v.has_proxy ? '✓ 가능' : '✗ 없음'],
+    ['proxy playback', v.has_proxy ? '✓ available' : '✗ none'],
   ];
   if (v.rtsp_url) rows.push(['rtsp_url', v.rtsp_url]);
   if (v.error) rows.push(['error', v.error]);
   const models = s?.models || {};
   modal({
-    title: '영상 정보 · ' + v.name,
+    title: 'Video info · ' + v.name,
     body: el('div', {},
       el('dl.kv', {}, rows.flatMap(([k, val]) =>
         [el('dt', {}, k), el('dd', {}, String(val))])),
       Object.keys(models).length ? el('div', {},
         el('div.divider'),
-        el('div', { class: 'flabel', style: { marginBottom: '6px' } }, '사용 모델'),
+        el('div', { class: 'flabel', style: { marginBottom: '6px' } }, 'Models used'),
         el('dl.kv', {}, Object.entries(models).flatMap(([k, val]) =>
           [el('dt', {}, k), el('dd', {}, val)]))) : null,
       el('div.divider'),
       el('div', { class: 'tiny muted' },
-        '⚠ 재생 관련 주의: 원본이 HEVC이면 Chrome에서 재생이 보장되지 않습니다. '
-        + 'faststart 미적용 시 브라우저가 전체 파일을 받아야 재생을 시작합니다.')),
+        'Playback note: if the source is HEVC, Chrome may not play it. '
+        + 'Without faststart the browser must download the whole file '
+        + 'before playback starts.')),
   });
 }
 
@@ -1062,8 +1082,8 @@ function showVideoInfo(v, s) {
  *  Şemada `details jsonb` alanı var; motor buraya metrik ayrıntısını yazar. */
 function showCandidates(cd, TM) {
   if (!cd || !cd.windows?.length) {
-    modal({ title: '후보 구간 점수',
-      body: el('div.empty', {}, '이 영상에 후보 점수 데이터가 없습니다.') });
+    modal({ title: 'Candidate range scores',
+      body: el('div.empty', {}, 'No candidate score data for this video.') });
     return;
   }
   const M = cd.metrics || {};
@@ -1078,13 +1098,13 @@ function showCandidates(cd, TM) {
         color: w.is_candidate ? 'var(--ac)' : 'var(--tx-2)' } },
         w.integrated_score.toFixed(3)),
       el('td', {}, w.is_candidate
-        ? el('span.evtag', { style: { color: 'var(--ac)' } }, '후보 ✓')
+        ? el('span.evtag', { style: { color: 'var(--ac)' } }, 'Candidate ✓')
         : el('span', { class: 'tiny muted' }, '—')),
       ...codes.map(c => {
         const sc = by[c];
         if (!sc) return el('td', {}, '—');
         return el('td', {
-          class: 'mono', title: `${M[c].ko} — 임계값 ${sc.threshold}`,
+          class: 'mono', title: `${M[c].ko} — threshold ${sc.threshold}`,
           style: {
             color: sc.exceeded ? 'var(--warn)' : 'var(--tx-3)',
             fontWeight: sc.exceeded ? 700 : 400,
@@ -1093,44 +1113,50 @@ function showCandidates(cd, TM) {
       }));
   });
   modal({
-    title: `이벤트 후보 구간 선정 근거 — ${cd.selected}/${cd.count} 구간 채택`,
+    title: `Why these ranges were selected — ${cd.selected}/${cd.count} accepted`,
     wide: true,
     body: el('div', {},
       el('div', { class: 'tiny muted', style: { marginBottom: '10px', lineHeight: 1.7 } },
-        `윈도우 ${cd.window_sec}초 · 통합 임계값 ${cd.threshold} · `,
-        '규칙 기반 지표들의 가중 합이 임계값을 넘으면 해당 구간이 '
-        + 'VLM 분석 대상이 됩니다. (DB: event_candidate_score)'),
+        `Window ${cd.window_sec}s · combined threshold ${cd.threshold} · `,
+        'when the weighted sum of the rule-based metrics exceeds the '
+        + 'threshold, that range is sent to the VLM. '
+        + '(DB: event_candidate_score)'),
       el('div', { style: { maxHeight: '54vh', overflow: 'auto' } },
         el('table.tbl', {},
           el('thead', {}, el('tr', {},
-            el('th', {}, '시각'), el('th', {}, '통합'), el('th', {}, '판정'),
+            el('th', {}, 'Time'), el('th', {}, 'Score'), el('th', {}, 'Verdict'),
             ...codes.map(c => el('th', { title: M[c].desc }, M[c].ko)))),
           el('tbody', {}, rows))),
       el('div.divider'),
       el('div', { class: 'tiny muted' },
-        '지표: ',
-        codes.map(c => `${M[c].ko}(가중 ${M[c].w})`).join(' · '))),
+        'Metrics: ',
+        codes.map(c => `${M[c].ko} (weight ${M[c].w})`).join(' · '))),
   });
 }
 
 function showAllEvents(events, TM) {
   const body = el('div', {}, el('table.tbl', {},
     el('thead', {}, el('tr', {},
-      ['시각', '길이', '유형', '설명', '점수', 'VLM'].map(h => el('th', {}, h)))),
+      ['Position', 'Wall clock', 'Length', 'Type', 'Description', 'Score', 'VLM']
+        .map(h => el('th', {}, h)))),
     el('tbody', {}, events.map(e => el('tr', {},
-      el('td', { class: 'mono' }, TM.wallClock(e.t_start)),
+      el('td', { class: 'mono' }, hms(e.t_start)),
+      // kayıt saati bilinmiyorsa wallClock() geçen süreye düşüyor — o zaman
+      // sütunu tekrarlamak yerine boş bırakıyoruz
+      el('td', { class: 'mono muted' },
+        e.wall_start ? TM.wallClock(e.t_start) : '—'),
       el('td', { class: 'mono' }, ms(e.t_end - e.t_start)),
       el('td', {}, el('span.evtag', { style: { color: e.color } }, e.type_ko)),
       el('td', {}, e.description),
       el('td', { class: 'mono' }, (e.score * 100).toFixed(0) + '%'),
       el('td', { class: 'tiny muted' }, `${e.vlm_model || ''} ${e.vlm_latency_ms || ''}ms`))))));
-  modal({ title: `모든 이벤트 (${events.length})`, body, wide: true });
+  modal({ title: `All events (${events.length})`, body, wide: true });
 }
 
 function showObject(o, videoId) {
   const defs = store.get('attributes');
   modal({
-    title: '객체 정보 · ' + (o.label || o.id),
+    title: 'Object info · ' + (o.label || o.id),
     body: el('div.row', { style: { alignItems: 'flex-start', gap: '16px' } },
       el('img', {
         src: o.crop, style: {
@@ -1144,19 +1170,19 @@ function showObject(o, videoId) {
           [['object_id', o.id], ['track_id', o.track_id], ['class', o.cls],
           ['camera', `${o.camera} · ${o.camera_place || ''}`],
           ['wall_time', o.wall_time],
-          ['구간', `${o.t_first}s – ${o.t_last}s`],
+          ['range', `${o.t_first}s – ${o.t_last}s`],
           ['conf', o.conf], ['node/ch', `${o.node_id}/${o.ch}`],
-          ['속성', attrText(o.attrs, defs?.attributes, o.cls) || '—']]
+          ['attributes', attrText(o.attrs, defs?.attributes, o.cls) || '—']]
             .flatMap(([k, v]) => [el('dt', {}, k), el('dd', {}, String(v))])),
         el('div.divider'),
         el('div.row', {},
           FEATURES.reid ? el('button.btn.sm', {
             onclick: () => { location.hash = `#/objects/${videoId}?q=${o.id}`; },
-          }, '🔍 이 인물 추적 (Re-ID)') : el('span', { class: 'tiny muted' },
-            'Re-ID 미구현 (다음 단계)'),
+          }, '🔍 Track this person (Re-ID)') : el('span', { class: 'tiny muted' },
+            'Re-ID not implemented yet'),
           el('button.btn.sm.ghost', {
             onclick: () => { location.hash = `#/single/${o.video_id}`; },
-          }, '▶ 등장 시점 재생')))),
+          }, '▶ Play first appearance')))),
   });
 }
 
@@ -1219,7 +1245,7 @@ async function screenMulti(groupId) {
       el('button.btn.sm', { onclick: () => toast('그룹 재요약은 모든 카메라를 큐에 넣습니다.', 'info') },
         '⟲ ' + t('reSummarize'))),
     el('div.hdr-sub', {},
-      el('span', {}, '요약 시간 범위'),
+      el('span', {}, 'Time range'),
       el('b', { class: 'mono' },
         `${new Date(base).toISOString().slice(0, 19).replace('T', ' ')} `
         + `~ +${dur(total)}`),
@@ -2101,9 +2127,28 @@ async function refreshGroups() {
     api.invalidate();
     const g = await api.groups();
     store.set({ groups: g.groups, eventTypes: g.event_types });
+    return g.groups;
   } catch (e) {
-    toast('그룹 목록 새로고침 실패: ' + e.message, 'warn');
+    toast('Could not refresh the group list: ' + e.message, 'warn');
+    return store.get('groups');
   }
+}
+
+/**
+ * Yükleme bittiği anda backend kaydı hâlâ RESERVED olabiliyor: dosya diske
+ * yazılıyor, ffprobe koşuyor, durum ancak ondan sonra `uploaded`a dönüyor.
+ * Tek seferlik tazeleme o araya denk gelince ağaçta mavi (registered) kayıt
+ * kalıyor ve ancak elle F5 ile düzeliyordu. Burada kısa süre yokluyoruz.
+ */
+async function waitForVideoReady(videoId, tries = 6, delayMs = 1200) {
+  for (let i = 0; i < tries; i++) {
+    const groups = await refreshGroups();
+    const cam = groups.flatMap((g) => g.cameras || [])
+      .find((c) => String(c.id) === String(videoId));
+    if (cam && cam.status !== 'registered') return cam;
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return null;
 }
 
 const UP = {
@@ -2115,7 +2160,77 @@ const UP = {
      tek video olarak gider. Kapalıyken her parça ayrı video_id alır. */
   merge: true,
   mergedId: null, // birleştirme sonrası oluşan video_id
+  /* VLM örnekleme penceresi. Backend her `interval` saniyede bir `window`
+     saniyelik pencere açıyor (metadata: vlm_segment_interval_seconds /
+     vlm_segment_duration_seconds). Kullanıcı önemli anları bu pencerelere
+     denk getirmek istiyor, o yüzden değerler arayüzde düzenlenebilir. */
+  vlmInterval: +(localStorage.getItem('up.vlmInterval') || 60),
+  vlmWindow: +(localStorage.getItem('up.vlmWindow') || 10),
 };
+
+/**
+ * Birleşik videodaki yerleşim. Boşluklar concat'te DÜŞER: kümülatif konum
+ * yalnızca parça sürelerinin toplamıdır, duvar saatindeki aralıklar değil.
+ *
+ * @returns {{rows:Array, total:number}} rows: {item, at, dur, end}
+ */
+function mergedLayout(items) {
+  /* SIRA: zaman çizgisindeki başlangıç saatine göre — `UP.items` dizisinin
+     kendi sırası değil. Kullanıcı çubukları sürükleyip yer değiştirdiğinde
+     dizi sırası olduğu gibi kalıyor; buna güvenince alt şerit sürüklemeyi
+     hiç görmüyordu. */
+  const idx = new Map(items.map((it, i) => [it, i]));
+  const list = items.filter((i) => i.startAt).sort((a, b) =>
+    a.startAt - b.startAt || idx.get(a) - idx.get(b));
+
+  const rows = [];
+  let t = 0;          // birleşik videodaki konum
+  let wallEnd = null; // bir öncekinin duvar saatindeki bitişi
+  for (const it of list) {
+    const full = it.durationMs || EST_DUR_MS;
+    const outMs = it.trimOut == null ? full : it.trimOut;
+    const wallStart = it.startAt.getTime();
+
+    /* ÇAKIŞMA: iki parça aynı zaman aralığını kapsıyorsa sonrakinin başı o
+       kadar atılır — üstteki rayın kırmızı bantla söylediği şey bu. Eskiden
+       burada hesaba katılmıyordu ve birleşik uzunluk çakışan görüntüyü iki
+       kez sayıyordu. Kalıcı yazmıyoruz (kullanıcının trim'i bozulmasın),
+       yalnızca bu yerleşim için hesaplıyoruz. */
+    let inMs = it.trimIn || 0;
+    let overlapCut = 0;
+    if (wallEnd != null && wallStart < wallEnd) {
+      overlapCut = Math.min(wallEnd - wallStart, Math.max(0, outMs - inMs - 200));
+      inMs += overlapCut;
+    }
+
+    const dur = Math.max(200, outMs - inMs);
+    rows.push({ item: it, at: t, dur, end: t + dur, inMs, outMs, overlapCut });
+    t += dur;
+    wallEnd = Math.max(wallEnd == null ? -Infinity : wallEnd,
+                       wallStart + effDur(it));
+  }
+  return { rows, total: t };
+}
+
+/** k. örnekleme penceresi [başlangıç, bitiş] — birleşik video saniyesinde. */
+function vlmWindows(totalMs, intervalSec, windowSec) {
+  const out = [];
+  const iv = Math.max(1, intervalSec) * 1000;
+  const w = Math.max(1, windowSec) * 1000;
+  for (let t = 0; t < Math.max(totalMs, 1); t += iv) {
+    out.push({ t0: t, t1: Math.min(t + w, t + iv) });
+  }
+  return out;
+}
+
+/** Bir parçanın ne kadarı örnekleme penceresine düşüyor (ms). */
+function coveredMs(row, wins) {
+  let n = 0;
+  for (const w of wins) {
+    n += Math.max(0, Math.min(row.end, w.t1) - Math.max(row.at, w.t0));
+  }
+  return n;
+}
 
 const pad2 = (n) => String(n).padStart(2, '0');
 
@@ -2168,6 +2283,74 @@ function toLocalInput(d) {
        + `T${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 }
 
+/* ---- hover önizleme -------------------------------------------------------
+   Dosyalar zaten tarayıcıda duruyor, yani sunucuya hiç gitmeden kare
+   alabiliyoruz: gizli bir <video>'yu istenen saniyeye sarıp <canvas>'a
+   çiziyoruz. Yalnızca tarayıcının açabildiği kaplarda çalışır (MP4/WebM/MOV);
+   AVI'de sessizce devre dışı kalır.
+
+   Her dosya için TEK bir <video> tutuluyor ve kareler önbellekleniyor —
+   sürükleme sırasında saniyede onlarca istek gelebiliyor. */
+const THUMB_CACHE = new Map();      // `${key}@${saniye}` → dataURL
+const THUMB_VIDEOS = new Map();     // item.key → { el, url, ok }
+
+function thumbVideo(it) {
+  let v = THUMB_VIDEOS.get(it.key);
+  if (v) return v;
+  const elv = document.createElement('video');
+  elv.preload = 'metadata';
+  elv.muted = true;
+  const url = URL.createObjectURL(it.file);
+  elv.src = url;
+  v = { el: elv, url, ok: null };
+  THUMB_VIDEOS.set(it.key, v);
+  return v;
+}
+
+function releaseThumbs() {
+  for (const v of THUMB_VIDEOS.values()) {
+    try { URL.revokeObjectURL(v.url); } catch { /* zaten serbest */ }
+  }
+  THUMB_VIDEOS.clear();
+  THUMB_CACHE.clear();
+}
+
+/** Kaynak dosyanın `sec`. saniyesindeki kareyi dataURL olarak verir. */
+function grabFrame(it, sec) {
+  const q = Math.max(0, Math.round(sec * 2) / 2);      // 0,5 sn'ye yuvarla
+  const ck = `${it.key}@${q}`;
+  if (THUMB_CACHE.has(ck)) return Promise.resolve(THUMB_CACHE.get(ck));
+
+  const v = thumbVideo(it);
+  if (v.ok === false) return Promise.resolve(null);
+
+  return new Promise((resolve) => {
+    const done = (val) => {
+      v.el.onseeked = null; v.el.onerror = null;
+      clearTimeout(timer);
+      if (val) THUMB_CACHE.set(ck, val);
+      resolve(val);
+    };
+    const timer = setTimeout(() => done(null), 2500);
+    v.el.onerror = () => { v.ok = false; done(null); };
+    v.el.onseeked = () => {
+      try {
+        const c = document.createElement('canvas');
+        const w = 160;
+        const h = Math.max(1, Math.round(w * (v.el.videoHeight || 9)
+                                          / (v.el.videoWidth || 16)));
+        c.width = w; c.height = h;
+        c.getContext('2d').drawImage(v.el, 0, 0, w, h);
+        v.ok = true;
+        done(c.toDataURL('image/jpeg', 0.7));
+      } catch { v.ok = false; done(null); }
+    };
+    const seek = () => { try { v.el.currentTime = q; } catch { done(null); } };
+    if (v.el.readyState >= 1) seek();
+    else v.el.onloadedmetadata = seek;
+  });
+}
+
 /** Tarayıcı açabiliyorsa süreyi yerel olarak oku (mp4/webm). AVI'de null. */
 function probeDurationMs(file) {
   return new Promise((resolve) => {
@@ -2187,6 +2370,20 @@ function probeDurationMs(file) {
    çizim içindir — gerçek süre upload sonrası ffprobe'dan gelir. */
 const EST_DUR_MS = 10 * 60 * 1000;
 
+/** Kırpma sonrası kullanılacak süre (kırpma yoksa dosyanın tamamı). */
+function effDur(it) {
+  const full = it.durationMs || EST_DUR_MS;
+  const a = it.trimIn || 0;
+  const b = it.trimOut == null ? full : it.trimOut;
+  return Math.max(200, Math.min(b, full) - a);
+}
+
+/** Bu parçada kırpma var mı (kaynağın tamamı kullanılmıyor mu)? */
+function isTrimmed(it) {
+  if (!it.durationMs) return !!it.trimIn;
+  return (it.trimIn || 0) > 0 || (it.trimOut != null && it.trimOut < it.durationMs);
+}
+
 /**
  * Zaman çizgisi düzeni: sıralı parçalar, boşluklar ve çakışmalar.
  *
@@ -2201,8 +2398,10 @@ function layoutUpload(items) {
   const parts = usable
     .map((i) => {
       const est = !i.durationMs;
-      const dur = i.durationMs || EST_DUR_MS;
-      return { item: i, est, dur,
+      // Zaman çizgisindeki uzunluk KIRPILMIŞ süredir — birleşik videoya
+      // giden de bu. Kırpma yoksa dosyanın tamamı.
+      const dur = effDur(i);
+      return { item: i, est, dur, trimmed: isTrimmed(i),
                t0: i.startAt.getTime(), t1: i.startAt.getTime() + dur };
     })
     .sort((a, b) => a.t0 - b.t0);
@@ -2264,21 +2463,22 @@ async function screenUpload() {
     if (!UP.merge) {
       mergeNote.style.color = 'var(--tx-2)';
       mergeNote.textContent = parts
-        ? `${parts}개 파일이 각각 별도 video_id로 등록됩니다.`
-        : '파일마다 별도 video_id로 등록됩니다.';
+        ? `${parts} file(s) will be registered as separate video_ids.`
+        : 'Each file is registered as its own video_id.';
       return;
     }
     mergeNote.style.color = '#fbbf24';
     const secs = totalMs / 1000;
     mount(mergeNote,
       el('div', {}, parts
-        ? `${parts}개 파일이 ffmpeg으로 하나의 MP4로 합쳐져 단일 video_id로 등록됩니다.`
-        : 'ffmpeg으로 하나의 MP4로 합쳐서 단일 video_id로 등록합니다.'),
+        ? `${parts} file(s) will be merged into one MP4 by ffmpeg and `
+          + 'registered as a single video_id.'
+        : 'Files are merged into one MP4 and registered as a single video_id.'),
       secs > 10 ? el('div', {},
-        `⚠ 분석 커버리지 주의: VLM은 60초마다 10초만 봅니다. 합치면 `
-        + `${hms(secs)} 중 약 `
-        + `${Math.max(1, Math.round(secs / 60)) * 10}초만 분석됩니다 — `
-        + `따로 두면 각 파일이 거의 전부 분석됩니다.`) : null);
+        'Coverage warning: the VLM looks at only 10s out of every 60s. '
+        + `Merged, roughly `
+        + `${Math.max(1, Math.round(secs / 60)) * 10}s of ${hms(secs)} `
+        + 'would be analyzed — kept separate, nearly all of each file is.') : null);
   }
 
   /* ---- yeniden çizim ---------------------------------------------------- */
@@ -2287,15 +2487,57 @@ async function screenUpload() {
   function drawInfo(L) {
     if (!L) { infoBox.textContent = ''; return; }
     mount(infoBox,
-      el('span', {}, `병합 길이 ${hms(L.mergedMs / 1000)}`),
+      el('span', {}, `Merged length ${hms(L.mergedMs / 1000)}`),
       L.gapMs ? el('span', { style: { color: 'var(--tx-2)' } },
-        ` · 공백 ${hms(L.gapMs / 1000)}`) : null,
+        ` · gaps ${hms(L.gapMs / 1000)}`) : null,
       L.overlapMs ? el('span', { style: { color: '#f87171' } },
-        ` · 중복 ${hms(L.overlapMs / 1000)} (뒤 영상에서 잘림)`) : null,
+        ` · overlap ${hms(L.overlapMs / 1000)} (trimmed from the later clip)`) : null,
       L.estCount ? el('span', { style: { color: '#fbbf24' } },
-        ` · ${L.estCount} parçanın süresi tahmini (yüklenince kesinleşir)`) : null,
+        ` · ${L.estCount} clip(s) with estimated length`) : null,
+      (() => {
+        const cut = UP.items.filter(isTrimmed);
+        if (!cut.length) return null;
+        const cutMs = cut.reduce(
+          (s, i) => s + ((i.durationMs || 0) - effDur(i)), 0);
+        return el('span', { style: { color: '#38bdf8' } },
+          ` · ✂ ${cut.length} trimmed (${hms(cutMs / 1000)} cut)`);
+      })(),
       el('span', { class: 'muted' },
-        ' · çubukları sürükleyerek başlangıç saatini düzeltebilirsiniz'));
+        ' · drag a bar to move it, drag its edges to trim'));
+  }
+
+  /* ---- hover önizleme kutusu --------------------------------------------- */
+  const thumbBox = el('div.upthumb', { style: { display: 'none' } },
+    el('img', {}), el('div.t', {}));
+  document.body.append(thumbBox);
+  onLeave(() => { thumbBox.remove(); releaseThumbs(); });
+
+  let thumbSeq = 0;
+  async function showThumb(it, srcSec, x, topY) {
+    const my = ++thumbSeq;
+    thumbBox.style.display = '';
+    thumbBox.style.left = Math.round(x) + 'px';
+    thumbBox.style.top = Math.round(topY) + 'px';
+    thumbBox.querySelector('.t').textContent =
+      `${it.name} · ${hms(srcSec)} of source`;
+    const url = await grabFrame(it, srcSec);
+    if (my !== thumbSeq) return;              // imleç çoktan başka yere gitti
+    const img = thumbBox.querySelector('img');
+    if (url) { img.src = url; img.style.display = ''; }
+    else {
+      img.style.display = 'none';
+      thumbBox.querySelector('.t').textContent =
+        `${it.name} · ${hms(srcSec)} · no preview (browser cannot decode)`;
+    }
+  }
+  function hideThumb() { thumbSeq++; thumbBox.style.display = 'none'; }
+
+  /** Zaman ekseni için okunur bir adım seç (1sn … 6sa). */
+  function niceStep(spanMs, target = 6) {
+    const STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800,
+                   3600, 7200, 10800, 21600];
+    const want = spanMs / 1000 / target;
+    return (STEPS.find((s) => s >= want) || 21600) * 1000;
   }
 
   function drawTimeline() {
@@ -2306,8 +2548,8 @@ async function screenUpload() {
         class: 'tiny muted',
         style: { padding: '22px', textAlign: 'center' },
       }, UP.items.length
-        ? 'başlangıç saati girilmemiş — sağdaki Start time alanını doldurun'
-        : 'video dosyalarını buraya sürükleyin'));
+        ? 'No start time yet — set it in the Start time field on the right'
+        : 'Drop video files here'));
       infoBox.textContent = '';
       return;
     }
@@ -2322,31 +2564,97 @@ async function screenUpload() {
     for (const g of L.gaps) {
       track.append(el('div.upgap', {
         style: { left: pctOf(g.t0) + '%', width: (pctOf(g.t1) - pctOf(g.t0)) + '%' },
-        title: `공백 ${hms((g.t1 - g.t0) / 1000)}`,
+        title: `Gap ${hms((g.t1 - g.t0) / 1000)}`,
       }, el('span', {}, hms((g.t1 - g.t0) / 1000))));
     }
-    for (const p of L.parts) {
+    /* Çubuk artık iki satır taşıyor: sıra no + ad, altında süre. Genişlik
+       dar kaldığında CSS ikinci satırı gizliyor. */
+    L.parts.forEach((p, i) => {
       const cls = [UP.items[UP.sel] === p.item ? 'on' : '', p.est ? 'est' : '']
         .filter(Boolean).join(' ');
+      const durTxt = p.est ? '?' : hms(p.dur / 1000);
       const bar = el('div.upbar', {
         class: cls,
         style: { left: pctOf(p.t0) + '%', width: (pctOf(p.t1) - pctOf(p.t0)) + '%' },
-        title: `${p.item.name}\n${new Date(p.t0).toLocaleString()} → `
+        title: `${i + 1}. ${p.item.name}\n`
+             + `start  ${new Date(p.t0).toLocaleString()}\n`
              + (p.est
-               ? 'süre henüz bilinmiyor (yükleyince kesinleşir)\n'
-               : `${new Date(p.t1).toLocaleString()}\n`)
-             + '(sürükleyerek kaydırın · Shift ile yapışma kapanır)',
-      }, el('span', {}, p.est ? `${p.item.name} · ?` : p.item.name));
+               ? 'length unknown until upload\n'
+               : `end    ${new Date(p.t1).toLocaleString()}\n`
+                 + `length ${hms(p.dur / 1000)}\n`)
+             + 'drag to move · hold Shift to disable snapping',
+      },
+        el('span.upbar-n', {}, String(i + 1)),
+        el('span.upbar-t', {},
+          el('b', {}, p.item.name),
+          el('i', {}, p.trimmed ? `✂ ${durTxt}` : durTxt)));
       bar.addEventListener('pointerdown', (e) => startDrag(e, p, L, bar, track));
+      /* İmleç çubuğun neresindeyse kaynağın o anındaki kareyi gösteriyoruz —
+         "hangi kısmı kırpıyorum / neyi çakıştırıyorum" sorusunun tek doğru
+         cevabı görüntünün kendisi. */
+      if (!p.est) {
+        bar.addEventListener('pointermove', (ev) => {
+          if (ev.buttons) return;                 // sürükleme sırasında rahat bırak
+          const r = bar.getBoundingClientRect();
+          const f = Math.min(1, Math.max(0, (ev.clientX - r.left) / (r.width || 1)));
+          const srcSec = ((p.item.trimIn || 0) + f * p.dur) / 1000;
+          showThumb(p.item, srcSec, ev.clientX, r.top);
+        });
+        bar.addEventListener('pointerleave', hideThumb);
+      }
+      /* Kenar tutamakları: sol = baştan kırp, sağ = sondan kırp. Süresi
+         bilinmeyen parçada kırpma anlamsız (neyi keseceğimizi bilmiyoruz). */
+      if (!p.est) {
+        for (const side of ['l', 'r']) {
+          const h = el('div.uptrim', { class: side });
+          h.addEventListener('pointerdown',
+            (e) => startTrim(e, p, L, side, track));
+          bar.append(h);
+        }
+      }
       track.append(bar);
-    }
+    });
     for (const o of L.overlaps) {
       track.append(el('div.upover', {
         style: { left: pctOf(o.t0) + '%',
                  width: Math.max(0.6, pctOf(o.t1) - pctOf(o.t0)) + '%' },
-        title: `중복 ${hms((o.t1 - o.t0) / 1000)} — ${o.b.name} 쪽에서 잘립니다`,
+        title: `Overlap ${hms((o.t1 - o.t0) / 1000)} — trimmed from ${o.b.name}`,
       }));
     }
+
+    /* --- VLM pencereleri, DOĞRUDAN çubukların üzerinde --------------------
+       Ayrı bir şerit yerine burada gösteriyoruz: parlak yeşil boyanan her
+       aralık gerçekten analiz edilecek görüntü, gerisine hiç bakılmayacak.
+       Kullanıcı klipleri sürükleyip kırparken önemli anı bu bantların altına
+       getirmeye çalışıyor — bakması gereken tek yer burası.
+
+       Eşleme duvar saatinden DEĞİL birleşik konumdan yapılıyor: boşluklar
+       concat'te düştüğü için bir klibin birleşik videodaki yeri duvar
+       saatiyle aynı olmak zorunda değil. `mergedLayout` her klip için
+       birleşik başlangıcı (`at`) ve çakışmadan atılan başı (`overlapCut`)
+       veriyor; aradaki dönüşüm doğrusal. */
+    const ML = mergedLayout(UP.items);
+    const rowOf = new Map(ML.rows.map((r) => [r.item, r]));
+    const wins = vlmWindows(ML.total, UP.vlmInterval, UP.vlmWindow);
+    let seenMs = 0;
+    for (const p of L.parts) {
+      const r = rowOf.get(p.item);
+      if (!r) continue;
+      // birleşik konum m → duvar saati t
+      const toWall = (m) => p.t0 + r.overlapCut + (m - r.at);
+      for (const w of wins) {
+        const a = Math.max(r.at, w.t0);
+        const b = Math.min(r.end, w.t1);
+        if (b - a <= 0) continue;
+        seenMs += b - a;
+        track.append(el('div.upseen', {
+          style: { left: pctOf(toWall(a)) + '%',
+                   width: (pctOf(toWall(b)) - pctOf(toWall(a))) + '%' },
+          title: `Analyzed by the VLM\nmerged ${hms(a / 1000)} – ${hms(b / 1000)}`,
+        }));
+      }
+    }
+    const blind = ML.rows.filter((r) => coveredMs(r, wins) === 0);
 
     /* Zaman çizgisinin kendisi de bırakma alanı — dosyayı doğrudan buraya
        sürükleyip bırakabilmek için. */
@@ -2359,14 +2667,101 @@ async function screenUpload() {
       addFiles([...e.dataTransfer.files].filter((f) => f.size > 0));
     });
 
+    /* --- duvar saati cetveli: eşit aralıklı, okunur adımlarla ------------- */
+    const ruler = el('div.uprule');
+    const step = niceStep(dSpan);
+    const first = Math.ceil(d0 / step) * step;
+    for (let t = first; t <= d0 + dSpan; t += step) {
+      const pc = pctOf(t);
+      if (pc < 1 || pc > 99) continue;
+      ruler.append(el('div.uptick', { style: { left: pc + '%' } },
+        el('span', {}, new Date(t).toLocaleTimeString())));
+    }
+
     tlBox.append(
       el('div.uptime', {},
         el('span', {}, new Date(L.t0).toLocaleString()),
         el('span.grow'),
+        el('span', { class: 'muted' },
+          `${L.parts.length} clips · ${hms(ML.total / 1000)} merged`),
+        el('span.grow'),
         el('span', {}, new Date(L.t1).toLocaleString())),
-      track);
+      ruler, track,
+      el('div.uprule-lbl', {},
+        el('span.upseen-key', {}),
+        ` bright = analyzed by the VLM (${UP.vlmWindow}s every `
+        + `${UP.vlmInterval}s of merged video) · everything else is skipped`,
+        el('span.grow'),
+        el('span', { style: { color: seenMs ? 'var(--ok)' : 'var(--tx-3)' } },
+          `${hms(seenMs / 1000)} analyzed`),
+        blind.length ? el('span', {
+          style: { color: '#f87171', marginLeft: '8px', fontWeight: 700 },
+          title: blind.map((r) => r.item.name).join(', '),
+        }, `· ${blind.length} clip(s) never analyzed`) : null));
 
     drawInfo(L);
+  }
+
+  /* ---- kenar tutamağıyla kırpma ------------------------------------------
+     Sol tutamak parçanın BAŞINI kırpar: hem `trimIn` artar hem `startAt`
+     aynı miktarda ilerler — böylece görüntünün duvar saatiyle hizası bozulmaz
+     (kırpılan kısım zaten o saatlerde geçen görüntüydü).
+     Sağ tutamak yalnızca `trimOut`'u kısar, başlangıç saati değişmez. */
+  function startTrim(e, part, L, side, track) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();               // gövde sürüklemesi tetiklenmesin
+    const it = part.item;
+    UP.sel = UP.items.indexOf(it);
+    it.auto = false;                   // elle kırpılan parça çapa olur
+
+    const rect = track.getBoundingClientRect();
+    const pad = (L.span || 60000) * 0.04;
+    const msPerPx = (L.span + pad * 2) / (rect.width || 1);
+    const x0 = e.clientX;
+    const full = it.durationMs;
+    const in0 = it.trimIn || 0;
+    const out0 = it.trimOut == null ? full : it.trimOut;
+    const start0 = it.startAt.getTime();
+    const MIN = 200;                   // en az 0,2 sn kalsın
+
+    e.currentTarget.setPointerCapture(e.pointerId);
+
+    const move = (ev) => {
+      const d = Math.round((ev.clientX - x0) * msPerPx / 100) * 100;
+      if (side === 'l') {
+        const ni = Math.max(0, Math.min(in0 + d, out0 - MIN));
+        it.trimIn = ni;
+        it.startAt = new Date(start0 + (ni - in0));
+      } else {
+        it.trimOut = Math.min(full, Math.max(out0 + d, in0 + MIN));
+      }
+      drawTimeline();
+      mount(infoBox, el('span', { class: 'updrag-info' },
+        `${it.name} · using ${hms((it.trimIn || 0) / 1000)}`
+        + ` → ${hms((it.trimOut == null ? full : it.trimOut) / 1000)}`
+        + ` of ${hms(full / 1000)}  (${hms(effDur(it) / 1000)})`));
+      // kesim noktasındaki kareyi göster — kırpmanın nereye denk geldiğini
+      // sayıdan değil görüntüden anlamak gerekiyor
+      const edgeMs = side === 'l'
+        ? (it.trimIn || 0)
+        : (it.trimOut == null ? full : it.trimOut);
+      showThumb(it, edgeMs / 1000, ev.clientX, rect.top);
+    };
+
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      if (it.trimIn === 0) delete it.trimIn;
+      if (it.trimOut === full) it.trimOut = null;
+      hideThumb();
+      chainAuto();          // uzunluk değişti — sonraki otomatik klipler kaysın
+      redraw();
+      saveStart(it);
+    };
+
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
   }
 
   /* ---- çubuğu sürükleyerek başlangıç saatini değiştirme ------------------ */
@@ -2422,7 +2817,7 @@ async function screenUpload() {
         + (part.est ? ' … ?'
           : ` … ${new Date(next + dur).toLocaleTimeString()}`)
         + `  (${delta >= 0 ? '+' : '−'}${hms(Math.abs(delta))})`
-        + (snapped ? '  ⟵ yapıştı' : '')));
+        + (snapped ? '  ⟵ snapped' : '')));
     };
 
     const up = async () => {
@@ -2431,6 +2826,7 @@ async function screenUpload() {
       window.removeEventListener('pointerup', up);
       bar.classList.remove('drag', 'snap');
       if (next === orig) { redraw(); return; }
+      it.auto = false;           // elle konumlandırılan parça çapa olur
       it.startAt = new Date(next);
       redraw();
       await saveStart(it);
@@ -2449,16 +2845,16 @@ async function screenUpload() {
     if (!live || !it.videoId || it.state !== 'done') return;
     try {
       await api.updateVideo(it.videoId, { start_at: it.startAt.toISOString() });
-      toast(`${it.name} · 시작 시각 저장됨`, 'ok', 2200);
+      toast(`${it.name} · start time saved`, 'ok', 2200);
     } catch (err) {
-      toast(`${it.name}: kaydedilemedi — ${err.message}`, 'err', 6000);
+      toast(`${it.name}: could not save — ${err.message}`, 'err', 6000);
     }
   }
 
   function drawList() {
     mount(listBox, UP.items.map((it, i) => {
-      const st = { pending: '대기', uploading: '업로드 중', done: '완료',
-                   error: '실패' }[it.state] || it.state;
+      const st = { pending: 'Waiting', uploading: 'Uploading', done: 'Done',
+                   error: 'Failed' }[it.state] || it.state;
       return el('div.uprow', {
         class: UP.sel === i ? 'on' : '',
         onclick: () => { UP.sel = i; redraw(); },
@@ -2478,7 +2874,7 @@ async function screenUpload() {
                    : it.state === 'error' ? '#f87171' : 'var(--tx-2)' },
           }, st),
         el('button.iconbtn', {
-          title: '제거',
+          title: 'Remove',
           onclick: (e) => {
             e.stopPropagation();
             UP.items.splice(i, 1);
@@ -2492,8 +2888,8 @@ async function screenUpload() {
   function drawSide() {
     const it = UP.items[UP.sel];
     mount(sideBox,
-      el('div', { style: { fontWeight: 700, fontSize: '15px' } }, 'Video Setting'),
-      !it ? el('div', { class: 'tiny muted' }, '영상을 선택하세요') : el('div', {
+      el('div', { style: { fontWeight: 700, fontSize: '15px' } }, 'Clip settings'),
+      !it ? el('div', { class: 'tiny muted' }, 'Select a clip') : el('div', {
         style: { display: 'grid', gap: '10px' },
       },
         el('div', { class: 'tiny muted' }, it.name),
@@ -2504,6 +2900,7 @@ async function screenUpload() {
             type: 'datetime-local', step: '1',
             value: toLocalInput(it.startAt),
             onchange: (e) => {
+              it.auto = false;
               it.startAt = e.target.value ? new Date(e.target.value) : null;
               redraw();
               if (it.startAt) saveStart(it);
@@ -2516,23 +2913,72 @@ async function screenUpload() {
             onclick: () => {
               const prev = UP.items[UP.sel - 1];
               if (!prev || !prev.startAt || !prev.durationMs) {
-                return toast('önceki videonun süresi bilinmiyor', 'warn');
+                return toast('Previous clip length is unknown', 'warn');
               }
               it.startAt = new Date(prev.startAt.getTime() + prev.durationMs);
               redraw();
               saveStart(it);
             },
-          }, '⇥ önceki videonun sonuna yapıştır') : null,
+          }, '⇥ Snap to end of previous clip') : null,
           el('div', { class: 'tiny muted', style: { marginTop: '4px' } },
             it.durationMs && it.startAt
-              ? `종료 ${new Date(it.startAt.getTime() + it.durationMs)
+              ? `Ends ${new Date(it.startAt.getTime() + it.durationMs)
                   .toLocaleString()}`
-              : '길이 업로드 후 확인됩니다')),
+              : 'Length is confirmed after upload')),
+
+        /* Kırpma — "kaynağın kaçıncı saniyesinden kaçıncı saniyesine".
+           Çakışmayı elle ayarlamanın kesin yolu bu; kenar tutamakları kaba
+           ayar, buradaki sayılar hassas ayar. */
+        it.durationMs ? el('div', {},
+          el('div', { class: 'flabel' }, 'Use range of source (seconds)'),
+          el('div.row', { style: { gap: '6px', alignItems: 'center' } },
+            el('input.input', {
+              type: 'number', min: 0, step: 0.1,
+              max: (it.durationMs / 1000).toFixed(1),
+              value: ((it.trimIn || 0) / 1000).toFixed(1),
+              style: { width: '78px' },
+              onchange: (e) => {
+                const out = it.trimOut == null ? it.durationMs : it.trimOut;
+                const v = Math.max(0, Math.min(+e.target.value * 1000, out - 200));
+                it.auto = false;
+                // başı kırparken başlangıç saatini de kaydır (bkz. startTrim)
+                it.startAt = new Date(it.startAt.getTime() + (v - (it.trimIn || 0)));
+                it.trimIn = v || 0;
+                redraw(); saveStart(it);
+              },
+            }),
+            el('span', { class: 'tiny muted' }, '→'),
+            el('input.input', {
+              type: 'number', min: 0, step: 0.1,
+              max: (it.durationMs / 1000).toFixed(1),
+              value: ((it.trimOut == null ? it.durationMs : it.trimOut) / 1000)
+                .toFixed(1),
+              style: { width: '78px' },
+              onchange: (e) => {
+                const v = Math.min(it.durationMs,
+                  Math.max(+e.target.value * 1000, (it.trimIn || 0) + 200));
+                it.auto = false;
+                it.trimOut = v >= it.durationMs ? null : v;
+                redraw();
+              },
+            }),
+            isTrimmed(it) ? el('button.btn.sm.ghost', {
+              title: 'Use the whole file',
+              onclick: () => {
+                it.auto = false;
+                it.startAt = new Date(it.startAt.getTime() - (it.trimIn || 0));
+                delete it.trimIn; it.trimOut = null;
+                redraw(); saveStart(it);
+              },
+            }, '↺') : null),
+          el('div', { class: 'tiny muted', style: { marginTop: '4px' } },
+            `source ${hms(it.durationMs / 1000)}`
+            + (isTrimmed(it) ? ` · using ${hms(effDur(it) / 1000)}` : ' · full'))) : null,
 
         el('div', {},
           el('div', { class: 'flabel' }, 'Metadata'),
           el('textarea.input', {
-            rows: 8, placeholder: '자유 입력 (설명, 촬영 조건, 비고…)',
+            rows: 8, placeholder: 'Free text (description, conditions, notes…)',
             style: { resize: 'vertical', fontFamily: 'inherit' },
             value: it.meta || '',
             oninput: (e) => { it.meta = e.target.value; },
@@ -2546,23 +2992,115 @@ async function screenUpload() {
 
   /* ---- dosya ekleme ----------------------------------------------------- */
 
+  /**
+   * Parçaları uç uca dizer: boşluk da çakışma da kalmaz.
+   *
+   * Sıra MEVCUT başlangıç saatlerine göre belirlenir; yani kullanıcı çubukları
+   * sürükleyerek bir sıra kurduysa o sıra korunur, sadece aralar kapatılır.
+   * İlk parçanın başlangıcı sabit kalır — kullanıcının girdiği gerçek kayıt
+   * saati bu, onu kaydırmak veriyi bozar.
+   */
+  function arrangeSequential() {
+    if (!UP.items.length) return;
+    const idx = new Map(UP.items.map((it, i) => [it, i]));
+    UP.items.sort((a, b) => {
+      const ta = a.startAt ? a.startAt.getTime() : Infinity;
+      const tb = b.startAt ? b.startAt.getTime() : Infinity;
+      return ta - tb || idx.get(a) - idx.get(b);
+    });
+    let t = UP.items[0].startAt ? UP.items[0].startAt.getTime() : Date.now();
+    for (const it of UP.items) {
+      it.startAt = new Date(t);
+      it.auto = true;           // hepsi yeniden otomatik yerleşime döndü
+      t += effDur(it);          // kırpılmışsa kırpılmış süre kadar ilerle
+    }
+    UP.sel = Math.min(UP.sel, UP.items.length - 1);
+  }
+
+  /**
+   * OTOMATİK yerleşimdeki parçaları bir öncekinin bitişine zincirler.
+   * Elle konumlandırılmış (`auto === false`) parçalara DOKUNMAZ — onlar
+   * çapa görevi görür, sonrakiler onların ardına dizilir.
+   *
+   * Neden gerekli: dosya süreleri `probeDurationMs()` ile sonradan geliyor.
+   * Ekleme anında uzunluk bilinmediği için ilk yerleşim tahminî oluyor;
+   * gerçek süre gelince buranın yeniden koşması şart, yoksa parçalar
+   * birbirinden 10 dakika uzakta duruyor.
+   */
+  function chainAuto() {
+    for (let i = 1; i < UP.items.length; i++) {
+      const prev = UP.items[i - 1];
+      const it = UP.items[i];
+      if (it.auto === false || !prev.startAt) continue;
+      it.startAt = new Date(prev.startAt.getTime() + effDur(prev));
+    }
+  }
+
+  /**
+   * Çakışmaları KIRPARAK çözer: iki parça aynı zaman aralığını kapsıyorsa
+   * sonrakinin BAŞI o kadar kırpılır ve başlangıcı öne alınır, böylece uç uca
+   * otururlar. Aynı görüntü iki kez analiz edilmemiş olur.
+   *
+   * Neden sonrakinin başı: öncekinin kuyruğunu kesmek, kullanıcının o parça
+   * için girdiği kayıt saatini geçersiz kılardı. Sonrakini kırpınca yalnızca
+   * "bu kaydın ilk N saniyesi zaten diğerinde var" demiş oluyoruz.
+   */
+  function trimOverlaps() {
+    const parts = [...UP.items].filter((i) => i.startAt && i.durationMs)
+      .sort((a, b) => a.startAt - b.startAt);
+    let fixed = 0, dropped = 0;
+    let cursor = null;
+    for (const it of parts) {
+      const t0 = it.startAt.getTime();
+      if (cursor != null && t0 < cursor) {
+        const over = cursor - t0;
+        const avail = effDur(it);
+        if (over >= avail) {
+          // parça tamamen bir öncekinin içinde kalıyor — kırpacak bir şey yok
+          dropped++;
+          cursor = Math.max(cursor, t0 + effDur(it));
+          continue;
+        }
+        it.trimIn = (it.trimIn || 0) + over;
+        it.startAt = new Date(cursor);
+        fixed++;
+      }
+      cursor = it.startAt.getTime() + effDur(it);
+    }
+    return { fixed, dropped };
+  }
+
   async function addFiles(files) {
     for (const f of files) {
-      const last = UP.items[UP.items.length - 1];
-      const startAt = (last && last.startAt && last.durationMs)
-        ? new Date(last.startAt.getTime() + last.durationMs)
-        : new Date();
       const it = {
         key: `f${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         file: f, name: f.name.replace(/\.[^.]+$/, ''),
-        startAt, durationMs: null, videoId: null,
+        startAt: null, durationMs: null, videoId: null,
         state: 'pending', progress: 0, meta: '',
       };
+      /* HER parçaya mutlaka bir başlangıç ver: son parçanın bittiği ana.
+         `layoutUpload` startAt'i olmayanı elediği için, bu atlanınca parça
+         zaman çizgisinde hiç görünmüyor. Eskiden yalnızca ilk parça saat
+         alıyordu ve bir kez sürükleme yapıldıysa (otomatik dizilim kapanınca)
+         2., 3., 4. dosyalar sessizce kayboluyordu — "Clear'dan sonra tek
+         video görünüyor" hatası buydu. */
+      const last = UP.items[UP.items.length - 1];
+      it.auto = true;                    // yeni parça otomatik yerleşimde
+      it.startAt = last && last.startAt
+        ? new Date(last.startAt.getTime() + effDur(last))
+        : new Date();
       UP.items.push(it);
+      chainAuto();
       redraw();
       // MP4 ise süreyi hemen okuyabiliriz; AVI/mpeg4'te null döner
       probeDurationMs(f).then((ms) => {
-        if (ms && !it.durationMs) { it.durationMs = ms; redraw(); }
+        if (ms && !it.durationMs) {
+          it.durationMs = ms;
+          // gerçek süre gelince zincir tazelensin — tahminle açılan
+          // aralıklar kapanır, elle konumlandırılanlar yerinde kalır
+          chainAuto();
+          redraw();
+        }
       });
     }
   }
@@ -2579,18 +3117,18 @@ async function screenUpload() {
    */
   async function doMergeUpload() {
     const todo = UP.items.filter((i) => i.state === 'pending');
-    if (!todo.length) return toast('업로드할 새 파일이 없습니다', 'warn');
-    if (!UP.collName.trim()) return toast('Collection 이름을 입력하세요', 'warn');
+    if (!todo.length) return toast('No new files to upload', 'warn');
+    if (!UP.collName.trim()) return toast('Enter a collection name', 'warn');
     if (todo.length !== UP.items.length) {
-      return toast('병합은 전체 파일을 한 번에 처리합니다 — Clear 후 다시 담아주세요',
-        'warn', 6000);
+      return toast('Merge processes all files at once — clear the list and '
+        + 'add them again', 'warn', 6000);
     }
 
-    const ordered = [...todo].sort((a, b) => {
-      const ta = a.startAt ? a.startAt.getTime() : 0;
-      const tb = b.startAt ? b.startAt.getTime() : 0;
-      return ta - tb || UP.items.indexOf(a) - UP.items.indexOf(b);
-    });
+    /* Sıra ve kesim noktaları TEK KAYNAKTAN: ekranda gördüğün birleşik şerit
+       ne diyorsa ffmpeg'e giden de o. Burada ayrıca hesaplamak, iki yerin
+       birbirinden ayrı düşmesi demekti (çakışma tam olarak öyle kaçmıştı). */
+    const ML = mergedLayout(UP.items);
+    const ordered = ML.rows.map((r) => r.item);
     const startAt = ordered[0].startAt || null;
 
     /* Boşluklar concat'te düşer: 09:00'da biten parçadan sonra 09:05'te
@@ -2598,10 +3136,11 @@ async function screenUpload() {
        yapmıyoruz — olay saatleri kayacağı için kullanıcı bilmeli. */
     const L = layoutUpload(UP.items);
     if (L && L.gapMs > 0) {
-      const ok = await confirmModal('병합 시 공백이 사라집니다',
-        `타임라인에 ${hms(L.gapMs / 1000)} 공백이 있습니다. `
-        + '병합된 영상에서는 이 공백이 제거되고 조각들이 바로 이어집니다 — '
-        + '이후 이벤트의 벽시계 시각이 실제와 어긋납니다. 계속할까요?');
+      const ok = await confirmModal('Merging will drop the gaps',
+        `The timeline has ${hms(L.gapMs / 1000)} of gaps. `
+        + 'In the merged video those gaps are removed and the clips run '
+        + 'back to back, so event wall-clock times will no longer match '
+        + 'reality. Continue?');
       if (!ok) return;
     }
 
@@ -2618,9 +3157,18 @@ async function screenUpload() {
         it.state = 'done'; drawList();
       }
 
-      toast('병합 중… (ffmpeg, 파일 크기에 따라 몇 분 걸릴 수 있습니다)',
+      toast('Merging… (ffmpeg — may take a few minutes for large files)',
         'ok', 8000);
-      const meta = await api.mergeBuild(mid);
+      /* Kesim noktaları birleşik yerleşimden — `inMs` çakışma kırpmasını da
+         içeriyor, yani üstteki rayda kırmızı görünen aralık gerçekten
+         atılıyor. Index'ler yükleme sırasıyla aynı (ordered = ML.rows). */
+      const trims = ML.rows.map((r, i) => ({
+        index: i,
+        in_ms: Math.round(r.inMs),
+        out_ms: Math.round(r.outMs),
+      })).filter((t, i) => t.in_ms > 0
+        || t.out_ms < Math.round(ML.rows[i].item.durationMs || Infinity));
+      const meta = await api.mergeBuild(mid, trims);
       for (const w of meta.warnings || []) toast(w, 'warn', 7000);
 
       if (!UP.groupId) {
@@ -2642,34 +3190,36 @@ async function screenUpload() {
       UP.mergedId = videoId;
       for (const it of UP.items) { it.videoId = videoId; it.state = 'done'; }
       const durMs = (v && v.duration_ms) || meta.duration_ms || 0;
-      toast(`병합 완료 · ${meta.part_count}개 → video ${videoId}`
+      toast(`Merged ${meta.part_count} clips → video ${videoId}`
         + ` · ${hms(durMs / 1000)} · ${meta.mode === 'copy'
-          ? '무손실 복사' : '재인코딩'} ${meta.elapsed_sec}s`, 'ok', 8000);
+          ? 'lossless copy' : 're-encoded'} in ${meta.elapsed_sec}s`,
+        'ok', 8000);
 
-      await refreshGroups();
+      // backend ffprobe'u bitirene kadar bekle, sonra ağacı çiz
+      await waitForVideoReady(videoId);
       mount(sidebar, treePanel(null, (c) => { location.hash = `#/single/${c.id}`; }));
       redraw();
     } catch (e) {
       for (const it of UP.items) if (it.state === 'uploading') it.state = 'error';
       redraw();
-      toast('병합 실패: ' + e.message, 'err', 8000);
+      toast('Merge failed: ' + e.message, 'err', 8000);
     } finally {
       if (mid) api.mergeDrop(mid);
     }
   }
 
   async function doUpload() {
-    if (!live) return toast('업로드는 LIVE 모드에서만 동작합니다', 'warn');
+    if (!live) return toast('Upload only works in LIVE mode', 'warn');
     if (UP.merge) return doMergeUpload();
     const todo = UP.items.filter((i) => i.state === 'pending');
-    if (!todo.length) return toast('업로드할 새 파일이 없습니다', 'warn');
-    if (!UP.collName.trim()) return toast('Collection 이름을 입력하세요', 'warn');
+    if (!todo.length) return toast('No new files to upload', 'warn');
+    if (!UP.collName.trim()) return toast('Enter a collection name', 'warn');
 
     try {
       if (!UP.groupId) {
         const g = await api.createGroup(UP.collName.trim());
         UP.groupId = g.id;
-        toast(`그룹 생성됨 · id ${g.id}`, 'ok');
+        toast(`Group created · id ${g.id}`, 'ok');
       }
       const res = await api.reserve(UP.groupId, todo.map((i) => i.key));
       const byKey = new Map(res.map((r) => [r.client_key, r]));
@@ -2695,12 +3245,13 @@ async function screenUpload() {
           toast(`${it.name}: ${e.message}`, 'err', 6000);
         }
       }
-      toast('업로드 완료', 'ok');
+      toast('Upload complete', 'ok');
       // yeni grup sol ağaçta ve Analysis ekranında hemen görünsün
-      await refreshGroups();
+      const lastId = todo[todo.length - 1].videoId;
+      if (lastId) await waitForVideoReady(lastId); else await refreshGroups();
       mount(sidebar, treePanel(null, (c) => { location.hash = `#/single/${c.id}`; }));
     } catch (e) {
-      toast('업로드 실패: ' + e.message, 'err', 6000);
+      toast('Upload failed: ' + e.message, 'err', 6000);
     }
   }
 
@@ -2745,25 +3296,77 @@ async function screenUpload() {
     onclick: () => fileInput.click(),
   },
     el('div', { style: { fontSize: '22px' } }, '⬇'),
-    el('div', {}, '영상 파일을 여기로 끌어다 놓으세요'),
-    el('div', { class: 'tiny muted' }, '또는 클릭해서 선택 · 여러 개 가능'));
+    el('div', {}, 'Drop video files here'),
+    el('div', { class: 'tiny muted' }, 'or click to browse · multiple files supported'));
 
   mount(stage,
     el('div.panel', {},
       el('div.panel-h', {}, 'Upload & Analysis', el('span.grow'),
         !live ? el('span', { class: 'tiny', style: { color: '#fbbf24' } },
-          'MOCK 모드 — 업로드는 LIVE에서만 동작합니다') : null),
+          'MOCK mode — upload only works in LIVE') : null),
       el('div.panel-b', { style: { display: 'grid', gap: '12px' } },
         el('div.row', { style: { gap: '8px' } },
           el('span', { class: 'tiny muted', style: { width: '110px' } },
             'Collection Name'),
           el('input.input', {
-            placeholder: '예: 광명역 · 2026-08-13',
+            placeholder: 'e.g. Gwangmyeong Stn · 2026-08-13',
             value: UP.collName,
             oninput: (e) => { UP.collName = e.target.value; },
           }),
-          el('button.btn.sm', { onclick: () => fileInput.click() }, '＋ 파일 선택'),
+          el('button.btn.sm', { onclick: () => fileInput.click() }, '+ Add files'),
+          /* Sürükleyerek bozulan sırayı tek tıkla toparlar; otomatik dizilim
+             kapandıysa yeniden açar. */
+          el('button.btn.sm.ghost', {
+            title: 'Lay all clips end to end, removing gaps and overlaps',
+            onclick: () => {
+              if (!UP.items.length) return toast('No files yet', 'warn');
+              arrangeSequential();
+              redraw();
+              toast('Clips arranged end to end', 'ok', 2000);
+            },
+          }, '⇥ Auto arrange'),
+          el('button.btn.sm.ghost', {
+            title: 'Resolve overlaps by trimming the head of the later clip',
+            onclick: () => {
+              const L = layoutUpload(UP.items);
+              if (!L || !L.overlapMs) return toast('No overlaps', 'ok', 1800);
+              const { fixed, dropped } = trimOverlaps();
+              redraw();
+              toast(`Trimmed ${fixed} clip(s)`
+                + (dropped ? ` · ${dropped} fully covered, left as is` : ''),
+                'ok', 3500);
+            },
+          }, '✂ Trim overlaps'),
           fileInput),
+
+        /* Örnekleme penceresi BACKEND ayarı — buradan değiştirilemiyor,
+           yalnızca zaman çizgisindeki yeşil bantları doğru çizebilmek için
+           biliniyor. Backend değeri değişirse buradan güncellenir. */
+        el('div.row', { style: { gap: '8px', alignItems: 'center' } },
+          el('span', { class: 'tiny muted' },
+            'VLM sampling (backend setting)'),
+          el('input.input', {
+            type: 'number', min: 1, step: 1, value: UP.vlmWindow,
+            style: { width: '62px' },
+            title: 'Window length the VLM looks at (vlm_segment_duration_seconds)',
+            onchange: (e) => {
+              UP.vlmWindow = Math.max(1, +e.target.value || 10);
+              localStorage.setItem('up.vlmWindow', UP.vlmWindow);
+              redraw();
+            },
+          }),
+          el('span', { class: 'tiny muted' }, 's every'),
+          el('input.input', {
+            type: 'number', min: 1, step: 1, value: UP.vlmInterval,
+            style: { width: '62px' },
+            title: 'Sampling interval (vlm_segment_interval_seconds)',
+            onchange: (e) => {
+              UP.vlmInterval = Math.max(1, +e.target.value || 60);
+              localStorage.setItem('up.vlmInterval', UP.vlmInterval);
+              redraw();
+            },
+          }),
+          el('span', { class: 'tiny muted' }, 's')),
 
         /* Birleştirme kipi. Varsayılan AÇIK: kullanıcı Upload ekranında
            parçaları tek bir zaman çizgisine dizdiğinde beklentisi tek bir
@@ -2774,7 +3377,7 @@ async function screenUpload() {
               type: 'checkbox', checked: UP.merge,
               onchange: (e) => { UP.merge = e.target.checked; drawMergeNote(); },
             }),
-            el('span', {}, '하나의 영상으로 병합')),
+            el('span', {}, 'Merge into a single video')),
           mergeNote),
 
         tlBox,
@@ -2789,7 +3392,9 @@ async function screenUpload() {
           el('button.btn.sm.ghost', {
             onclick: () => {
               UP.items = []; UP.groupId = null; UP.sel = 0;
-              UP.mergedId = null; redraw();
+              UP.mergedId = null;
+              releaseThumbs();
+              redraw();
             },
           }, 'Clear')))),
     // İş yönetimi ayrı bir sekme değil — burada, kendiliğinden tazelenerek
@@ -3000,15 +3605,15 @@ async function boot() {
         ? `● LIVE · ${h.status || '?'}`
         : `● MOCK · ${h.gallery} vec / ${h.videos} video`;
       s.title = API_MODE === 'live'
-        ? 'Gerçek DVSummary API (/live)' : 'Yerel mock veri';
+        ? 'Live DVSummary API (/live)' : 'Local mock data';
       s.style.color = API_MODE === 'live' ? '#4ade80' : '';
     }
   } catch {
     document.body.innerHTML =
       '<div style="padding:40px;font-family:monospace;color:#fca5a5">'
-      + 'Mock API sunucusuna ulaşılamıyor.<br><br>'
-      + 'Çalıştırın: <b>python server.py</b><br>'
-      + 'Sonra açın: <b>http://127.0.0.1:8000/</b></div>';
+      + 'Cannot reach the mock API server.<br><br>'
+      + 'Run: <b>python server.py</b><br>'
+      + 'Then open: <b>http://127.0.0.1:8000/</b></div>';
     return;
   }
   route();

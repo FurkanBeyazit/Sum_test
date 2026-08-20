@@ -35,13 +35,27 @@ export const FEATURES = {
   // Re-ID: gerçek pipeline'da SOLIDER yok, embedding üretilmiyor → canlıda kapalı
   reid: !LIVE && localStorage.getItem('ff.reid') === '1',
   multiCamera: true,
-  eventSearch: true,       // VLM açıklamalarında metin filtresi
   map: false,              // 지도 보기 — camera.lat/lon hazır, UI yok
   // Aşağıdakiler detection verisine dayanır. Gerçek API'de o veri
   // sunucudaki SQLite'ta kilitli, HTTP'den çıkmıyor → canlıda kapalı.
   bbox: !LIVE,
   objects: !LIVE,
-  candidateScore: !LIVE,
+
+  /* --- geçici olarak kapatılanlar ------------------------------------------
+     Hiçbiri müşteriden istenen kapsamda değil ve bir kısmı gerçek backend'de
+     karşılıksız. Kod duruyor, sadece çizilmiyor — açmak için buradaki değeri
+     true yapmak yeterli.                                                    */
+
+  // Kural tabanlı aday skoru. Gerçek pipeline üretmiyor, ısı haritası hep boş.
+  candidateScore: false,
+  // Olay metni araması. Backend'de arama yok, istemci içi metin eşleşmesi
+  // VLM açıklamaları kısa olduğu için pratikte hiçbir şey bulmuyor.
+  eventSearch: false,
+  // candidate/confirmed/dismissed onay akışı — gerçek API'de kalıcı değil
+  // (`eventStatus` yalnızca bellekte tutuyor), o yüzden yanıltıcı.
+  eventStatus: false,
+  // Oynatıcı üzerindeki kare yakalama düğmesi
+  snapshot: false,
 };
 // Konsoldan aç:  localStorage.setItem('ff.reid','1'); location.reload()
 
@@ -107,7 +121,10 @@ class Store {
 
 export const store = new Store({
   user: null,
-  lang: localStorage.getItem('lang') || 'en',
+  /* Tek dil: İngilizce. Alana özgü terimler (durum adları, öznitelik
+     değerleri) Korece kalıyor — müşterinin sözlüğü o. Eski 'tr' seçeneği
+     kaldırıldı; localStorage'da kalmış olabilir, ona düşmüyoruz. */
+  lang: localStorage.getItem('lang') === 'ko' ? 'ko' : 'en',
   groups: [],
   eventTypes: {},
   attributes: null,
@@ -177,22 +194,6 @@ const T = {
     track: '추적', tracking: '추적 대상 목록', candidates: '후보',
     similarity: '유사도', continueSearch: '계속 검색', sameperson: '동일 인물',
     notsame: '다름', logout: '로그아웃', carry: '소지품', age: '연령대',
-  },
-  tr: {
-    videoList: 'Video grupları', objectFilter: 'Nesne filtresi', videoInfo: 'Video bilgisi',
-    summaryInfo: 'Özet bilgisi', eventFlow: 'Zaman akışı',
-    reSummarize: 'Yeniden özetle', viewOriginal: 'Orijinali aç', allEvents: 'Tüm olaylar',
-    apply: 'Uygula', reset: 'Sıfırla', objectKind: 'Nesne tipi',
-    all: 'Hepsi', person: 'Kişi', vehicle: 'Araç', gender: 'Cinsiyet',
-    male: 'Erkek', female: 'Kadın', upperColor: 'Üst giysi rengi',
-    videoLength: 'Video süresi', summaryLength: 'Özet süresi', mainObject: 'Ana nesneler',
-    mainEvent: 'Olay sayısı', generatedAt: 'Üretim zamanı',
-    single: 'Tek video özeti', multi: 'Çoklu kamera', objects: 'Nesne listesi',
-    jobs: 'İş yönetimi', settings: 'Ayarlar', system: 'Sistem', api: 'API sözleşmesi',
-    search: 'Olay araması', prompt: 'Analiz prompt\'u',
-    track: 'Takip et', tracking: 'Takip listesi', candidates: 'Aday',
-    similarity: 'Benzerlik', continueSearch: 'Aramaya devam', sameperson: 'Aynı kişi',
-    notsame: 'Farklı', logout: 'Çıkış', carry: 'Taşınan eşya', age: 'Yaş',
   },
 };
 export function t(k) { return (T[store.get('lang')] || T.en)[k] || k; }
@@ -398,9 +399,9 @@ export let api = mockApi;
 if (LIVE) {
   const { initLive } = await import('./live.js');
   api = await initLive();
-  console.info('[core] veri kaynağı: GERÇEK API (/live → DVSummary)');
+  console.info('[core] data source: LIVE API (/live -> DVSummary)');
 } else {
-  console.info('[core] veri kaynağı: mock');
+  console.info('[core] data source: mock');
 }
 
 /* ----------------------------------------------------------- SSE utils --- */
@@ -491,7 +492,7 @@ export function attrText(attrs, attrDefs, cls) {
     const vals = Array.isArray(v) ? v : [v];
     for (const vv of vals) {
       const found = d.values.find(x => x.v === vv);
-      if (found) out.push(lang === 'tr' ? found.tr : found.ko);
+      if (found) out.push(found.ko);
     }
   }
   return out.join(' · ');

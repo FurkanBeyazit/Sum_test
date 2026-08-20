@@ -771,6 +771,18 @@ table.tbl tr:hover td { background: var(--bg-2); }
           margin-bottom: 6px; font-family: var(--mono, monospace); }
 
 /* Zaman çizgisi: parçalar mutlak konumlu, çakışma üstte kırmızı bant */
+/* Duvar saati cetveli — parça çubuklarının ÜSTÜNDE, ince tırnaklarla */
+.uprule { position: relative; height: 15px; margin-bottom: 2px; }
+.uptick { position: absolute; top: 0; height: 100%; border-left: 1px solid var(--line);
+          transform: translateX(-0.5px); }
+.uptick span { position: absolute; left: 3px; top: 0; font-size: 10px;
+               color: var(--tx-3); white-space: nowrap;
+               font-family: var(--mono, monospace); }
+
+/* zaman çizgisinin altındaki açıklama satırı (renk örneği + sayaçlar) */
+.uprule-lbl { display: flex; align-items: center; gap: 5px; font-size: 10px;
+              color: var(--tx-3); margin-top: 5px; }
+
 .uptrack { position: relative; height: 38px; border-radius: 5px;
            background: var(--bg-3); overflow: hidden;
            touch-action: none; }        /* sürüklerken sayfa kaymasın */
@@ -794,8 +806,29 @@ table.tbl tr:hover td { background: var(--bg-2); }
 .upbar.snap { box-shadow: inset 0 0 0 2px #38bdf8, 0 4px 12px rgba(0,0,0,.4); }
 /* sürüklerken alttaki bilgi satırı canlı saati gösterir */
 .updrag-info { color: var(--acc); font-family: var(--mono, monospace); }
-.upbar span { padding: 0 6px; white-space: nowrap; overflow: hidden;
-              text-overflow: ellipsis; }
+/* Çubuk içeriği: solda sıra numarası rozeti, sağda ad + süre.
+   Dar çubukta ad/süre gizlenir, numara kalır — hangi klip olduğu yine belli. */
+.upbar { display: flex; align-items: center; gap: 5px; padding: 0 5px;
+         justify-content: flex-start; }
+.upbar-n { flex: 0 0 auto; min-width: 15px; height: 15px; padding: 0 3px;
+           border-radius: 3px; background: rgba(0,0,0,.35);
+           font-size: 10px; line-height: 15px; text-align: center;
+           font-family: var(--mono, monospace); }
+.upbar-t { flex: 1 1 auto; min-width: 0; display: flex; gap: 5px;
+           align-items: baseline; overflow: hidden; }
+.upbar-t b { font-weight: 600; overflow: hidden; text-overflow: ellipsis;
+             white-space: nowrap; }
+.upbar-t i { font-style: normal; opacity: .75; flex: 0 0 auto;
+             font-family: var(--mono, monospace); font-size: 10px; }
+.upbar span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Kırpma tutamakları — çubuğun iki ucunda, gövde sürüklemesinin üstünde */
+.uptrim { position: absolute; top: 0; bottom: 0; width: 7px; z-index: 3;
+          cursor: ew-resize; background: rgba(255,255,255,.18); }
+.uptrim.l { left: 0; border-radius: 4px 0 0 4px; }
+.uptrim.r { right: 0; border-radius: 0 4px 4px 0; }
+.uptrim:hover { background: #38bdf8; }
+.upbar:hover .uptrim { background: rgba(255,255,255,.34); }
+.upbar:hover .uptrim:hover { background: #38bdf8; }
 /* Çakışan aralık — ikinci kayıtta kırpılacak bölge */
 .upover { position: absolute; top: 0; height: 38px; background: #ef4444;
           opacity: .85; pointer-events: none; }
@@ -805,6 +838,29 @@ table.tbl tr:hover td { background: var(--bg-2); }
          border: 1px dashed var(--line); border-radius: 4px;
          display: grid; place-items: center;
          font-size: 10px; color: var(--tx-2); }
+
+/* Zaman çizgisinde VLM'in gerçekten göreceği aralık.
+   Çubuğun üzerine bindirilir: parlak = analiz edilecek, gerisi atlanacak. */
+.upseen { position: absolute; top: 4px; height: 30px; z-index: 2;
+          pointer-events: none; border-radius: 2px;
+          background: rgba(34,197,94,.30);
+          box-shadow: inset 0 0 0 1px rgba(134,239,172,.85),
+                      0 0 8px rgba(34,197,94,.45); }
+/* açıklama satırındaki küçük renk örneği */
+.upseen-key { display: inline-block; width: 16px; height: 8px;
+              border-radius: 2px; vertical-align: middle;
+              background: rgba(34,197,94,.30);
+              box-shadow: inset 0 0 0 1px rgba(134,239,172,.85); }
+
+/* Hover kare önizlemesi */
+.upthumb { position: fixed; z-index: 9999; pointer-events: none;
+           transform: translate(-50%, calc(-100% - 10px));
+           background: var(--bg-1); border: 1px solid var(--line);
+           border-radius: 6px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,.5); }
+.upthumb img { display: block; width: 160px; border-radius: 3px; }
+.upthumb .t { font-size: 10px; color: var(--tx-2); margin-top: 3px;
+              text-align: center; font-family: var(--mono, monospace);
+              max-width: 160px; }
 
 .uprow { display: flex; align-items: center; gap: 8px; padding: 5px 8px;
          border: 1px solid var(--line); border-radius: 6px;

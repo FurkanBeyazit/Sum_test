@@ -590,12 +590,50 @@ def probe_video(path):
     }
 
 
-def merge_videos(parts, out_path):
-    """parts: [Path] sırayla. (mode, warnings) döner, hata olursa RuntimeError."""
+def merge_videos(parts, out_path, trims=None, pads=None):
+    """parts: [Path] sırayla. (mode, warnings) döner, hata olursa RuntimeError.
+
+    `trims`: parça başına (in_sec, out_sec) ya da None. Çakışan kayıtlarda
+    kullanıcının timeline'da belirlediği kırpma noktaları buradan geliyor —
+    yoksa concat dosyaları tam boyuyla birleştirir ve arayüzdeki "çakışma
+    kırpıldı" uyarısı gerçeği yansıtmaz.
+
+    Kırpma varken stream copy hâlâ mümkün (concat demuxer'ın inpoint/outpoint
+    yönergeleri) ama kesim ANAHTAR KAREYE yuvarlanır; kare hassasiyeti
+    gerekiyorsa yeniden kodlama yolu kullanılır.
+    """
     probes = [probe_video(p) for p in parts]
     bad = [parts[i].name for i, pr in enumerate(probes) if pr is None]
     if bad:
         raise RuntimeError("ffprobe okuyamadı: " + ", ".join(bad))
+
+    if trims is None:
+        trims = [None] * len(parts)
+    # Kırpmayı dosyanın gerçek süresine sıkıştır — arayüz tahminî süreyle
+    # çalışmış olabilir.
+    norm = []
+    for pr, tr in zip(probes, trims):
+        dur = pr.get("duration") or 0
+        if not tr:
+            norm.append(None)
+            continue
+        a = max(0.0, float(tr[0] or 0))
+        b = float(tr[1]) if tr[1] is not None else dur
+        if dur:
+            b = min(b, dur)
+        if b - a <= 0.04:            # bir karelik pencereden küçükse yok say
+            norm.append(None)
+            continue
+        norm.append(None if (a <= 0.001 and (not dur or b >= dur - 0.001))
+                    else (a, b))
+    trims = norm
+    trimmed = any(t is not None for t in trims)
+
+    # Siyah dolgu: bir parçayı VLM örnekleme penceresine oturtmak için
+    # ÖNÜNE eklenen boş süre. Gerçek kare üretmek gerekiyor — concat boşluk
+    # kavramı bilmiyor, sadece arka arkaya ekler.
+    pads = [max(0.0, float(x or 0)) for x in (pads or [0] * len(parts))]
+    padded = any(p > 0.01 for p in pads)
 
     warnings = []
     first = probes[0]
@@ -609,21 +647,34 @@ def merge_videos(parts, out_path):
     audio = [pr["has_audio"] for pr in probes]
     if same and len(set(audio)) > 1:
         same = False
-        warnings.append("파트별 오디오 구성이 달라 재인코딩합니다")
+        warnings.append("Audio layout differs between parts — re-encoding")
 
     if not same:
         sizes = {(pr["width"], pr["height"]) for pr in probes}
         if len(sizes) > 1:
             warnings.append(
-                f"해상도가 서로 다릅니다 {sorted(sizes)} → "
-                f"{first['width']}×{first['height']}로 맞춥니다")
+                f"Resolutions differ {sorted(sizes)} — scaling all to "
+                f"{first['width']}x{first['height']}")
+
+    if padded and same:
+        # Dolgu karelerinin kodlama parametreleri kaynakla birebir tutmadığı
+        # sürece stream copy bozuk çıkar; bu yolu denemek yerine doğrudan
+        # yeniden kodlamaya geçiyoruz.
+        same = False
+        warnings.append("Black padding requires re-encoding")
 
     if same:
         # concat demuxer + stream copy: en hızlı ve kayıpsız yol
         lst = out_path.parent / "concat.txt"
-        lst.write_text(
-            "".join(f"file '{p.as_posix()}'\n" for p in parts),
-            encoding="utf-8")
+        body = ""
+        for p, tr in zip(parts, trims):
+            body += f"file '{p.as_posix()}'\n"
+            if tr:
+                body += f"inpoint {tr[0]:.3f}\noutpoint {tr[1]:.3f}\n"
+        lst.write_text(body, encoding="utf-8")
+        if trimmed:
+            warnings.append(
+                "Trimmed with stream copy — cuts snap to the nearest keyframe")
         cmd = ["ffmpeg", "-y", "-loglevel", "error",
                "-f", "concat", "-safe", "0", "-i", str(lst),
                "-c", "copy", "-movflags", "+faststart", str(out_path)]
@@ -632,19 +683,38 @@ def merge_videos(parts, out_path):
             return "copy", warnings
         # Kopyalama başarısızsa (zaman damgaları / parametre seti uyuşmazlığı)
         # sessizce yeniden kodlamaya düşüyoruz.
-        warnings.append("스트림 복사 실패 → 재인코딩으로 전환")
+        warnings.append("Stream copy failed — falling back to re-encoding")
 
     # concat filtresi: her girdiyi ilkinin boyutuna ölçekle, sonra birleştir
-    n = len(parts)
-    ins = []
-    for p in parts:
-        ins += ["-i", str(p)]
+    #
+    # Kırpma GİRDİ SEVİYESİNDE (-ss/-t), `trim` filtresiyle değil. Filtre yolu
+    # denendi ve şaşırtıcı biçimde yanlış: `trim,setpts=PTS-STARTPTS` sonrası
+    # `fps` filtresi kareleri hâlâ ORİJİNAL zaman ekseninden üretiyor, yani
+    # 0.5–1.5 sn kırpması 1.0 sn yerine 1.53 sn veriyordu. -ss/-t ile çözücü
+    # zaten yalnızca istenen aralığı okuyor; hem doğru hem daha hızlı.
     w, h = first["width"], first["height"]
-    chains = "".join(
-        f"[{i}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,"
-        f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{i}];"
-        for i in range(n))
-    concat = "".join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[out]"
+    ins = []
+    chains = ""
+    labels = []
+    k = 0                       # ffmpeg girdi indeksi (dolgular da girdi)
+    for p, tr, pd in zip(parts, trims, pads):
+        if pd > 0.01:
+            # lavfi ile üretilen siyah kare akışı — süresi -t ile sınırlı
+            ins += ["-f", "lavfi", "-t", f"{pd:.3f}",
+                    "-i", f"color=c=black:s={w}x{h}:r=30"]
+            chains += f"[{k}:v]setsar=1,fps=30,setpts=PTS-STARTPTS[v{k}];"
+            labels.append(f"[v{k}]")
+            k += 1
+        if tr:
+            ins += ["-ss", f"{tr[0]:.3f}", "-t", f"{tr[1] - tr[0]:.3f}"]
+        ins += ["-i", str(p)]
+        chains += (f"[{k}:v]scale={w}:{h}:force_original_aspect_ratio=decrease,"
+                   f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,"
+                   f"setpts=PTS-STARTPTS[v{k}];")
+        labels.append(f"[v{k}]")
+        k += 1
+    n = len(labels)
+    concat = "".join(labels) + f"concat=n={n}:v=1:a=0[out]"
     cmd = (["ffmpeg", "-y", "-loglevel", "error"] + ins
            + ["-filter_complex", chains + concat, "-map", "[out]",
               "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
@@ -653,7 +723,7 @@ def merge_videos(parts, out_path):
     code, _, errtxt = run_ff(cmd)
     if code != 0:
         raise RuntimeError((errtxt or "ffmpeg hatası").strip()[:400])
-    warnings.append("오디오는 병합에서 제외되었습니다")
+    warnings.append("Audio was dropped from the merge")
     return "reencode", warnings
 
 
@@ -1074,11 +1144,29 @@ class Handler(BaseHTTPRequestHandler):
                 return self.err(400, "no_parts", "önce parça yükleyin")
             order = sorted(m["parts"])
             paths = [m["parts"][i]["path"] for i in order]
+            # Gövde isteğe bağlı: {"trims": [{"index":0,"in_ms":0,"out_ms":8200}, …]}
+            b = self.body_json()
+            by_idx = {}
+            for t in (b.get("trims") or []):
+                try:
+                    by_idx[int(t.get("index"))] = (
+                        (t.get("in_ms") or 0) / 1000.0,
+                        None if t.get("out_ms") is None else t["out_ms"] / 1000.0)
+                except (TypeError, ValueError):
+                    continue
+            trims = [by_idx.get(i) for i in order]
+            pad_idx = {}
+            for t in (b.get("pads") or []):
+                try:
+                    pad_idx[int(t.get("index"))] = (t.get("pad_ms") or 0) / 1000.0
+                except (TypeError, ValueError):
+                    continue
+            pads = [pad_idx.get(i, 0.0) for i in order]
             out = m["dir"] / "merged.mp4"
             print(f"  merge {mid}: {len(paths)} parça birleştiriliyor…")
             t0 = time.time()
             try:
-                mode, warnings = merge_videos(paths, out)
+                mode, warnings = merge_videos(paths, out, trims, pads)
             except subprocess.TimeoutExpired:
                 return self.err(504, "ffmpeg_timeout",
                                 "birleştirme 30 dakikayı aştı")

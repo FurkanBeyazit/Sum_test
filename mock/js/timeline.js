@@ -85,10 +85,18 @@ export class Timeline {
   X(t) { return this.plotX + (t - this.t0) / (this.t1 - this.t0) * this.plotW; }
   T(x) { return this.t0 + (x - this.plotX) / this.plotW * (this.t1 - this.t0); }
 
+  /**
+   * Eksen etiketi. `startIso` yoksa GEÇEN SÜRE gösterilir — tek video
+   * ekranında istenen bu: oynatıcı 00:00'dan sayıyor, eksen de öyle saymalı.
+   * Bir saati aşan kayıtlarda mm:ss yanıltıcı olduğu için saat basamağı da
+   * yazılıyor.
+   */
   wallLabel(t) {
     if (!this.startIso) {
       const s = Math.max(0, t);
-      return `${pad(s / 60)}:${pad(s % 60)}`;
+      return s >= 3600
+        ? `${pad(s / 3600)}:${pad((s / 60) % 60)}:${pad(s % 60)}`
+        : `${pad(s / 60)}:${pad(s % 60)}`;
     }
     const d = new Date(Date.parse(this.startIso) + t * 1000);
     return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;

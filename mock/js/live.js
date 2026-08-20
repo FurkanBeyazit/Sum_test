@@ -175,7 +175,7 @@ function firstLine(text) {
     .replace(/\*\*/g, '')
     .replace(/^[-*•]\s*/gm, '')
     .split('\n').map((s) => s.trim()).filter(Boolean);
-  if (!clean.length) return '(boş yanıt)';
+  if (!clean.length) return '(empty response)';
   const s = clean[0];
   return s.length > 90 ? s.slice(0, 88) + '…' : s;
 }
@@ -215,7 +215,7 @@ function toEvent(r, video, idx) {
     wall_end: isoPlus(video.start_time, t1),
     type: quiet ? 'quiet' : 'vlm',
     type_ko: quiet ? '특이사항 없음' : 'VLM 관측',
-    type_tr: quiet ? 'Olay yok' : 'VLM gözlemi',
+    type_tr: quiet ? 'No event' : 'VLM observation',
     severity: quiet ? 'info' : 'warn',
     color: quiet ? '#5b6470' : '#e0a33e',
     description: text,
@@ -311,7 +311,7 @@ function toRun(j) {
     progress: prog,
     stage: j.worker_id || null,
     stage_label: st === 'running'
-      ? `${j.worker_id || 'worker'} · 진행률 미제공`
+      ? `${j.worker_id || 'worker'} · no progress reported`
       : (j.worker_id || '—'),
     created_at: j.queued_at,
     started_at: j.started_at,
@@ -364,8 +364,8 @@ export const liveApi = {
     const orphan = byGroup.get('_') || [];
     if (orphan.length) {
       out.push({
-        id: '_', name: '(그룹 없음)', name_ko: '(그룹 없음)',
-        desc: 'video_group ataması yapılmamış videolar',
+        id: '_', name: '(no group)', name_ko: '(no group)',
+        desc: 'Videos with no video_group assigned',
         display_order: out.length,
         cameras: orphan.map((v) => ({ ...v, event_count: 0, object_count: 0 })),
       });
@@ -380,8 +380,8 @@ export const liveApi = {
                               'cancelled'],
       },
       event_types: [
-        { code: 'vlm', ko: 'VLM 관측', tr: 'VLM gözlemi', color: '#e0a33e' },
-        { code: 'quiet', ko: '특이사항 없음', tr: 'Olay yok', color: '#5b6470' },
+        { code: 'vlm', ko: 'VLM 관측', color: '#e0a33e' },
+        { code: 'quiet', ko: '특이사항 없음', color: '#5b6470' },
       ],
     };
   },
@@ -429,7 +429,7 @@ export const liveApi = {
 
   mergeCreate: async () => {
     const r = await fetch('/api/merge', { method: 'POST' });
-    if (!r.ok) throw new Error(`merge oturumu açılamadı (HTTP ${r.status})`);
+    if (!r.ok) throw new Error(`could not start merge session (HTTP ${r.status})`);
     return r.json();
   },
 
@@ -444,15 +444,19 @@ export const liveApi = {
       };
       x.onload = () => (x.status >= 200 && x.status < 300
         ? resolve(JSON.parse(x.responseText || '{}'))
-        : reject(new Error(`parça ${index}: HTTP ${x.status}`)));
-      x.onerror = () => reject(new Error('ağ hatası'));
+        : reject(new Error(`part ${index}: HTTP ${x.status}`)));
+      x.onerror = () => reject(new Error('network error'));
       x.send(file);
     });
   },
 
   /** ffmpeg concat — uzun sürebilir, çağıran yerde beklemeli gösterin. */
-  mergeBuild: async (mergeId) => {
-    const r = await fetch(`/api/merge/${mergeId}/build`, { method: 'POST' });
+  mergeBuild: async (mergeId, trims, pads) => {
+    const r = await fetch(`/api/merge/${mergeId}/build`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trims: trims || [], pads: pads || [] }),
+    });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d.detail || d.error || `HTTP ${r.status}`);
     return d;
@@ -507,7 +511,7 @@ export const liveApi = {
           reject(err);
         }
       };
-      x.onerror = () => reject(new Error('ağ hatası'));
+      x.onerror = () => reject(new Error('network error'));
       x.send(fd);
     });
   },
@@ -558,7 +562,7 @@ export const liveApi = {
       const v = vids.find((x) => x.id === String(j.video_id));
       return {
         analysis_job_id: `Q${j.video_id}`,
-        name: `${v ? v.name : 'video ' + j.video_id} 분석`,
+        name: `Analysis of ${v ? v.name : 'video ' + j.video_id}`,
         prompt: (j.request && j.request.prompt) || null,
         status: run.status,
         run_ids: [run.job_id],
@@ -668,7 +672,7 @@ export const liveApi = {
   reidVerdict: async () => ({}),
 
   tracklists: async () => ({ total: 0, items: [] }),
-  tracklist: async () => ({ id: 'TL1', name: '추적 목록', members: [] }),
+  tracklist: async () => ({ id: 'TL1', name: 'Track list', members: [] }),
   trackAdd: async () => ({}),
   trackDel: async () => ({}),
 
@@ -683,7 +687,7 @@ export const liveApi = {
       devices: [{
         index: 0,
         name: workers.length
-          ? `${workers.length} analysis worker (${busy} meşgul)`
+          ? `${workers.length} analysis worker(s), ${busy} busy`
           : 'analysis worker yok',
         driver: '—',
         cuda: '—',
