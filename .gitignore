@@ -111,6 +111,24 @@ Thumbs.db
 *.sqlite
 
 
-mock/assets
 # ffmpeg birlestirme calisma alani (gecici parcalar + birlesik MP4)
 .merge/
+# ---------------------------------------------------------------------------
+# Bu depo yalnizca calisan arayuzu tasiyor: server.py, tools/, web/.
+# Asagidakiler bilerek disarida — depoda dursun, gecmise girmesin.
+# ---------------------------------------------------------------------------
+
+# Mock donemi (2026-08'de kaldirildi). Yerel arsiv, referans icin.
+archive/
+
+# Notlar, rehberler, Postman koleksiyonu, playback test sayfasi.
+docs/
+
+# Uretilen medya: proxy MP4'ler, kucuk resimler. 200 MB+ ve yeniden
+# uretilebilir — python tools/proxy_cache.py --all
+web/assets/
+
+# Ornek/test videolari ve Windows baslatma betigi (kisiye ozel yollar).
+*.avi
+*.mp4
+*.bat

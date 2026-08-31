@@ -19,7 +19,7 @@ detection_result_count bunu kanıtlıyor) — kırılan tek şey tarayıcıda oy
 --------------
 Backend proxy üretimini ekleyene kadar bu işi biz yapıyoruz:
 
-    GET /video/{id}/stream  →  indir  →  ffmpeg  →  mock/assets/proxy/{id}.mp4
+    GET /video/{id}/stream  →  indir  →  ffmpeg  →  web/assets/proxy/{id}.mp4
 
 Üretilen dosyanın üç garantisi var, üçü de oynatıcı için şart:
 
@@ -51,7 +51,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-PROXY_DIR = ROOT / "mock" / "assets" / "proxy"
+PROXY_DIR = ROOT / "web" / "assets" / "proxy"
 INDEX = PROXY_DIR / "index.json"
 
 API = os.environ.get("DVSUMMARY_API", "http://172.20.14.161:8001")
@@ -160,6 +160,20 @@ def download(video_id, dst):
 
 # -------------------------------------------------------------- transcode ---
 
+def decode_errors(path, seconds=20):
+    """Üretilen dosyanın bir penceresini gerçekten çözer.
+
+    ffmpeg remux'a 0 dönebilir ama çıkan dosya tarayıcıda oynamayabilir:
+    AVI içindeki H.264 bazen data partitioning (Extended profile) kullanıyor
+    ya da çift/geri giden DTS taşıyor. Chrome böyle dosyada seek edince kareyi
+    gösteriyor, oynatmaya başlamıyor — yani sessizce bozuk. Bunu ancak
+    çözerken görebiliyoruz, konteyner bilgisine bakarak değil.
+    """
+    r = sh(["ffmpeg", "-v", "error", "-i", str(path), "-t", str(seconds),
+            "-f", "null", "-"])
+    return (r.stderr or "").strip()
+
+
 def transcode(src, dst, info, api_codec=None):
     """Tarayıcı dostu MP4 üretir.
 
@@ -192,9 +206,14 @@ def transcode(src, dst, info, api_codec=None):
         cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
                "-c", "copy", "-movflags", "+faststart", str(dst)]
         if sh(cmd).returncode == 0:
-            print(f" ok ({dst.stat().st_size/1048576:.1f} MB)")
-            return "remux"
-        print(" başarısız, yeniden kodlamaya düşülüyor")
+            err = decode_errors(dst)
+            if not err:
+                print(f" ok ({dst.stat().st_size/1048576:.1f} MB)")
+                return "remux"
+            print(" bitstream sorunlu, yeniden kodlanacak")
+            print(f"    {err.splitlines()[0][:110]}")
+        else:
+            print(" başarısız, yeniden kodlamaya düşülüyor")
 
     # Denenecek girdi seçenekleri: önce olduğu gibi, olmazsa decoder dayatarak.
     variants = [([], "")]
@@ -229,15 +248,51 @@ def transcode(src, dst, info, api_codec=None):
 
 # ------------------------------------------------------------------- akış ---
 
+def src_sig(meta):
+    """Kaynağın kimliği. Backend sıfırlanıp id'ler yeniden kullanıldığında
+    `1.mp4` hâlâ eski videoyu gösteriyordu — önbellek yalnızca id'ye
+    bakıyordu. guid_id kayıt yeniden yaratılınca değişir, bu yüzden asıl
+    ölçüt o; yoksa dosya boyutu + süreye düşüyoruz."""
+    meta = meta or {}
+    g = meta.get("guid_id")
+    if g:
+        return str(g)
+    if meta.get("video_file_size") or meta.get("duration_ms"):
+        return f"{meta.get('video_file_size')}:{meta.get('duration_ms')}"
+    return None
+
+
+def stale_reason(rec, meta):
+    """Önbellekteki kayıt bu videoya mı ait? Değilse sebebini döndür."""
+    sig, old = src_sig(meta), rec.get("src_sig")
+    if old is not None:
+        return None if old == sig else "kaynak değişmiş (id yeniden kullanılmış)"
+
+    # İmzasız eski kayıt: süreyi karşılaştır. Remux de encode de süreyi
+    # korumalı, sapma varsa proxy başka bir videodan kalmış demektir.
+    want = (meta or {}).get("duration_ms")
+    got = rec.get("duration")
+    if want and got:
+        if abs(got - want / 1000) > max(2.0, want / 1000 * 0.05):
+            return (f"süre tutmuyor (backend {want/1000:.1f}s, "
+                    f"proxy {got:.1f}s)")
+    return None
+
+
 def build(video_id, meta, force=False, keep_original=False):
     ix = load_index()
     key = str(video_id)
     out = PROXY_DIR / f"{video_id}.mp4"
 
     if out.is_file() and not force and key in ix:
-        print(f"== video {video_id}: önbellekte, atlanıyor "
-              f"({out.stat().st_size/1048576:.1f} MB)")
-        return ix[key]
+        why = stale_reason(ix[key], meta)
+        if why:
+            print(f"== video {video_id}: {why} → yeniden üretiliyor")
+            force = True                    # .orig da yeniden indirilsin
+        else:
+            print(f"== video {video_id}: önbellekte, atlanıyor "
+                  f"({out.stat().st_size/1048576:.1f} MB)")
+            return ix[key]
 
     meta = meta or {}
     name = meta.get("name") or f"video {video_id}"
@@ -283,6 +338,7 @@ def build(video_id, meta, force=False, keep_original=False):
     rec = {
         "video_id": video_id,
         "name": name,
+        "src_sig": src_sig(meta),
         "url": f"assets/proxy/{video_id}.mp4",
         "mode": mode,
         "src_codec": (info or {}).get("codec"),
@@ -311,7 +367,9 @@ def cmd_list():
         rec = ix.get(str(v["id"]))
         src = f"{v.get('codec') or '—'}"
         if rec:
-            state = f"✓ {rec['size_mb']} MB · {rec['mode']}"
+            why = stale_reason(rec, v)
+            state = (f"! BAYAT — {why}" if why
+                     else f"✓ {rec['size_mb']} MB · {rec['mode']}")
             pc = rec.get("codec") or "?"
         else:
             state = "— yok"

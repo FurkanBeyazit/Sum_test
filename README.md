@@ -1,293 +1,301 @@
-# 지능형 영상 요약 플랫폼 — Frontend Mockup
+# 지능형 영상 요약 플랫폼 — Arayüz
 
-Uçtan uca çalışan bir prototip: **gerçek HTTP API**, **gerçek video oynatma
-(Range + seek)**, kural tabanlı **후보 구간 선정**, ve tüm ekranlar.
+<sub>[한국어 README](README.ko.md)</sub>
 
-> **Kapsam (güncel):** video + timeline + özet.
-> Görsel arama (CLIP) **yok** — boru hattı Plan 1.
-> Re-ID kodda çalışıyor ama arayüzde **gizli**; backend'de ~1 ay sonra gelecek.
-
-Ayrıca sıfırdan öğrenmek için 12 derslik bir laboratuvar var:
-[`/lab/`](http://127.0.0.1:8000/lab/) — test adımları
-[`TEST-ADIMLARI.md`](TEST-ADIMLARI.md)'de.
-
-Tasarım kararlarının gerekçeleri ve backend'e sorulacak sorular için
-[`PROJE-NOTLARI.md`](PROJE-NOTLARI.md) dosyasına bakın. Bu README nasıl
-çalıştırılacağını ve neyin gerçek, neyin simülasyon olduğunu anlatır.
-
----
-
-## Hızlı başlangıç
-
-```bat
-start.bat
-```
-
-Ya da elle:
+CCTV kayıtlarını yükleyen, analiz kuyruğuna alan ve sonuçları zaman çizgisinde
+gösteren web arayüzü. Veri kaynağı tek: gerçek DVSummary backend'i.
 
 ```bash
-pip install numpy pillow          # ffmpeg PATH'te olmalı
-python tools/gen_mock.py          # ~5 sn   — veri seti
-python tools/gen_video.py         # ~90 sn  — sentetik CCTV videoları
-python server.py                  # http://127.0.0.1:8000/
+python server.py            # http://127.0.0.1:8000
 ```
 
-Doğrulama:
+Backend başka bir makinedeyse:
 
 ```bash
-python tools/smoke_test.py        # 132 kontrol — UI'ın yaptığı her çağrı
+DVSUMMARY_API=http://host:port python server.py
 ```
 
-Giriş ekranında herhangi bir kullanıcı adı/parola kabul edilir.
+Bağımlılık yok — Python stdlib yeter. Video birleştirme için `ffmpeg` PATH'te
+olmalı.
 
 ---
 
-## Ne gerçek, ne simülasyon?
-
-Bu ayrım önemli — mockup'ı değerlendirirken neye güvenebileceğinizi belirler.
-
-### Gerçek (production'da da aynı çalışacak)
-
-| | Detay |
-|---|---|
-| **HTTP API** | 34 endpoint, gerçek istek/cevap, gerçek gecikme, sayfalama, filtreleme |
-| **Video oynatma** | H.264 + faststart + 1 sn GOP, HTTP **Range** ile gerçek seek |
-| **BBox overlay** | Normalize koordinat, letterbox hesabı, `requestVideoFrameCallback`, DPI ölçekleme, tıklama algılama, track yolu |
-| **Re-ID benzerliği** | `fur/human/db_datas` içindeki **165 adet gerçek SOLIDER (1024-d) vektörü** üzerinde gerçek kosinüs hesabı + gerçek kırpma görüntüleri |
-| **Uzun iş akışı** | SSE ile ilerleme, aşama aşama, iptal edilebilir |
-| **Timeline** | Canvas, zoom/pan, swimlane, aday skoru ısı şeridi, 4000+ pencerede akıcı |
-| **Zaman dönüşümü** | Medya zamanı ↔ duvar saati ↔ özet video zamanı, tek `TimeMapper` modülünde |
-
-### Simülasyon (gerçek modelin yerini tutan mantık)
-
-| | Nasıl simüle edildi | Gerçekte ne olacak |
-|---|---|---|
-| **후보 구간 선정** | Track verisinden 7 metrik (hız, mesafe, duruş, çırpınma…) | Optical flow + Kalman durumları üzerinden aynı büyüklükler |
-| **VLM** | Aday pencere için hazır Korece açıklama | InternVL2-8B / Qwen2-VL, pencere başına 1–3 sn |
-| **이벤트 검색** | Eşanlam sözlüğüyle metin eşleştirme | Aynı — SQL `ILIKE` veya metin embedding'i |
-| **Object Detection / PAR** | Senaryo yörüngeleri ve elle yazılmış öznitelikler | YOLOv11 + PAR-Swin |
-| **Video içeriği** | PIL ile çizilmiş sentetik CCTV sahnesi | Gerçek VMS kaydı |
-
-**Görsel arama (CLIP) YOK.** Boru hattı Plan 1:
+## Mimarî
 
 ```
-Detection + Tracking + PAR
-  → event_candidate_score (7 kural tabanlı metrik, göreli eşik)
-  → eşiği aşan pencereler VLM'e
-  → vlm_event.description → TIMELINE
+tarayıcı ──fetch('/live/…')──► server.py ──HTTP──► DVSummary API
+   ▲                              │                (172.20.14.161:8001)
+   └────────── JSON ──────────────┘
 ```
 
-Arama, VLM'in yazdığı açıklamalarda metin filtresidir (~3 ms).
-`탑승` → Camera2 @106s, `쓰러` → Camera4 @158s. Türkçe `araca binen adam`
-küçük bir eşanlam sözlüğüyle çalışır. Aday skorları timeline'ın üst şeridinde
-ısı çubuğu olarak görünür; `◍ 후보 점수` butonu hangi metriğin eşiği aştığını
-tablo hâlinde gösterir.
+`server.py` üç iş yapar, üçü de küçük:
+
+1. `web/` altındaki statik arayüzü sunar (HTTP Range dahil — seek çalışsın diye)
+2. `/live/*` isteklerini backend'e iletir. Tarayıcı oraya doğrudan gidemiyor:
+   farklı origin, backend'de CORS başlığı yok
+3. `/api/merge/*` — yüklenen parçaları ffmpeg ile tek MP4'e birleştirip
+   backend'e akıtır. Bu iş bize ait
 
 ---
 
-## Veri seti
+## Dosya düzeni
 
-### Senaryo — Area1 (2025-05-20 08:30:00 – 08:33:00)
+```
+├── server.py               köprü + statik + birleştirme
+├── web/
+│   ├── index.html
+│   ├── css/app.css         tasarım sistemi
+│   ├── js/
+│   │   ├── core.js         DOM yardımcıları, store, biçimleme, FEATURES
+│   │   ├── backend.js      DVSummary API adaptörü — tek veri kaynağı
+│   │   ├── overlay.js      canvas bbox katmanı (letterbox, rVFC, DPI)
+│   │   ├── timeline.js     canvas zaman ekseni (zoom/pan, swimlane)
+│   │   ├── app.js          yönlendirici (hash → ekran)
+│   │   ├── ui.js           üst çubuk, sol ağaç, ekran ömrü
+│   │   ├── fx/fibers.js    login arka planı (WebGL2, bağımlılıksız)
+│   │   └── screens/        ekran başına bir dosya
+│   └── assets/proxy/       yerel oynatma proxy'leri (üretilen, depoda yok)
+└── tools/proxy_cache.py    tarayıcıda oynatılabilir proxy üretir
+```
 
-Dört kamera, tek bir hikâye. Sentetik videolar bu yörüngelerden üretildiği
-için **bbox metadata'sı görüntüyle birebir hizalı** — overlay matematiğindeki
-en ufak hata gözle görülür.
+---
 
-| Kamera | Yer | Olaylar |
-|---|---|---|
-| **Camera1** | 정문 (ana kapı) | P1 (beyaz gömlek + sırt çantası) girer → telefonla konuşur → sağa gider. Kırmızı montlu kadın geçer. |
-| **Camera2** | 주차장 (otopark) | Siyah sedan girer → **P1 buraya geçer** → araca biner → araç çıkar |
-| **Camera3** | 후문 (arka kapı) | Gri montlu adam sürekli gidip gelir (배회 / başıboş dolaşma) |
-| **Camera4** | 로비 | Kalabalık akış + 150. saniyede yaşlı biri **yere düşer** |
+## Arayüz nasıl çalışıyor
 
-**Re-ID — şu an gizli.** Backend'de yaklaşık bir ay sonra gelecek; sorgu
-fotoğraftan yapılacak. Kod çalışır hâlde duruyor (`Camera1/P1` ↔ `Camera2/P1`
-benzerliği **0.9751**, diğerleri **< 0.08**) ama arayüzde kapalı.
-Açmak için tarayıcı konsoluna:
+Çatı yok, build adımı yok, bağımlılık yok. Tarayıcı `index.html` içindeki tek
+`<script type="module">` etiketini okuyor, gerisi ES modülleri.
+
+### Katmanlar
+
+```
+        app.js                yönlendirici
+           │
+        screens/*.js          ekranlar — birbirini ASLA import etmez
+           │
+    ┌──────┴──────┬───────────┬────────────┐
+  ui.js      timeline.js   overlay.js   fx/fibers.js
+    │
+  core.js                    her şeyin altı
+    │
+  backend.js                 tek veri kaynağı
+```
+
+Bağımlılık yönü tek yönlü, döngü yok. Bir ekranı silmek başka hiçbir şeyi
+bozmuyor; yeni ekran eklemek `screens/` altına bir dosya + `app.js`'te bir
+`case` demek.
+
+### Bir ekran açılırken ne oluyor
+
+```
+hash değişti  →  app.js route()
+                   1. runCleanup()      önceki ekranın timer/observer'ları kapanır
+                   2. oturum            store.user yoksa api.me(), yoksa #/login
+                   3. katalog           store.groups boşsa api.groups() (bir kez)
+                   4. id doğrula        silinmiş video id'si → ilk kayda düş
+                   5. screenX(...)      ekran kendi DOM'unu kurar
+                        └─ mount(ROOT(), …)   #app tamamen değişir
+```
+
+`route()` `hashchange` olayına bağlı. Ekranlar `async`: veriyi kendileri
+çekiyor, `app.js` beklemiyor.
+
+### Üç mekanizma
+
+Arayüzün tamamı bu üçünün üstünde duruyor.
+
+**1 · `el()` — DOM kurucu** (`core.js`)
+
+Template string yok, `innerHTML` yok. İç içe çağrı ağacın kendisi:
 
 ```js
-localStorage.setItem('ff.reid', '1'); location.reload()
+el('div.panel', {},
+  el('div.panel-h', {}, 'Info', el('span.grow'), btn),
+  el('div.panel-b', {}, grid));
 ```
 
-### Ölçek ve kenar durumlar
+`'div.panel.op-info'` sınıfları ayrıştırıyor, `onclick` doğrudan fonksiyon
+alıyor, `style` nesne kabul ediyor, `null`/`false` çocuklar atlanıyor — koşullu
+render için `cond ? el(…) : null` yazmak yetiyor.
 
-| Grup | Ne gösteriyor |
-|---|---|
-| **Area2** — 물류창고 | 3 kamera × **24 saat**, ~110 olay, 1439 pencere, **proxy video yok** → büyük ölçekli timeline ve zarif bozulma |
-| **Area3** — 근린공원 | `ready` (analiz edilmemiş) + `failed` (CUDA OOM hata mesajıyla) |
-| **Area4** — 시내 | `analyzing` (%43, ETA gösterir) + `registered` RTSP kaynağı |
-| **Area5** — 실증 데이터셋 | **165 gerçek SOLIDER embedding'i** + gerçek kırpma görüntüleri, `node_id 20003` |
+**2 · `store` — paylaşılan durum** (`core.js`)
 
-Böylece `video_status` enum'unun her değeri UI'da bir karşılık buluyor.
+Ekranlar arası taşınan tek şey: oturum, katalog, dil, süzgeçler.
+
+```js
+store.set({ groups: g.groups });
+const gs = store.get('groups');
+```
+
+Ekrana özel durum (seçili nesne, atanmış renkler) store'a girmiyor — ekran
+fonksiyonunun kapanışında yaşıyor, ekran kapanınca çöp toplayıcıya gidiyor.
+
+> `store` bir yayın/abone mekanizması da taşıyor (`store.on(key, fn)`) ama
+> **hiçbir yerde kullanılmıyor**: ekranlar `mount()` ile kendilerini bütün
+> olarak yeniden çiziyor. Sınıfta ayrıca hiç okunmayan ~18 anahtar duruyor
+> (`playhead`, `showTrails`, `segments`…) — mock döneminden kalma. Temizlenmesi
+> gereken bir yer.
+
+**3 · `onLeave()` — ekran ömrü** (`ui.js`)
+
+Ekranlar zamanlayıcı, `ResizeObserver`, `EventSource` açıyor. Kapanışta
+kapatılmazlarsa arka planda kalıp yok olmuş DOM'a yazmaya çalışıyorlar:
+
+```js
+const t = setInterval(poll, 3000);
+onLeave(() => clearInterval(t));
+```
+
+`app.js` bir sonraki gezinmede `runCleanup()` ile hepsini çalıştırıyor.
+
+> Bir tuzak: ekran `await api.detections(…)` beklerken kullanıcı gezinebilir.
+> Devam eden kod artık ekranda olmayan bir düğüme yazar. Uzun `await`'lerden
+> sonra `if (!document.body.contains(vwell)) return;` kontrolü var.
 
 ---
 
-## Ekranlar
+## Dosya dosya
 
-| Rota | Ekran | Öne çıkanlar |
+### Çekirdek
+
+| Dosya | Satır | Ne yapıyor |
+|---|---:|---|
+| **`core.js`** | 382 | `el()`, `mount()`, `clear()`; `store`; zaman/boyut biçimleme (`hms`, `dur`, `bytes`); `toast()`, `modal()`; `TimeMapper` (duvar saati ↔ video saniyesi); `FEATURES` bayrakları; `api` nesnesini dışa veriyor |
+| **`backend.js`** | 1152 | DVSummary'nin **tek** adaptörü. Ekranlar `fetch` çağırmıyor, hepsi buradan geçiyor. Uç adresleri, sorgu parametreleri, önbellek ve backend tuhaflıklarının tamamı bu dosyada kapalı |
+| **`app.js`** | 127 | Yönlendirici. Hash → ekran, oturum/katalog ön koşulu, ekran değişiminde temizlik |
+| **`ui.js`** | 294 | Her ekranda tekrar eden parçalar: üst çubuk, sol video ağacı, onay kutusu, yeniden analiz sorusu; `onLeave`/`runCleanup` |
+
+### Canvas katmanları
+
+| Dosya | Satır | Ne yapıyor |
+|---|---:|---|
+| **`timeline.js`** | 396 | Zaman ekseni. Zoom/pan, şeritler (swimlane), playhead, tıklama→saniye eşlemesi. DPI'a göre ölçekleniyor; `clientWidth`ten genişlik okuyor |
+| **`overlay.js`** | 305 | Video üstündeki kutu katmanı. `object-fit: contain` letterbox matematiği: videonun gerçek kare alanı ile `<video>` kutusu farklı, kutular kaymasın diye geometri her yeniden boyutlamada hesaplanıyor. `requestVideoFrameCallback` ile kareye kilitli |
+| **`fx/fibers.js`** | 372 | Login arka planı. Ham WebGL2, kütüphane yok. Görünmezken / sekme arka plandayken / `prefers-reduced-motion` açıkken tamamen duruyor |
+
+### Ekranlar
+
+| Dosya | Satır | Rota | Ne yapıyor |
+|---|---:|---|---|
+| **`upload.js`** | 1252 | `#/upload` | Parçaları duvar saatine göre sıralar, sunucuda ffmpeg ile birleştirir, backend'e yükler, analiz kuyruğuna alır. Grup adı çakışırsa mevcut grubu kullanır |
+| **`single.js`** | 915 | `#/single/:id` | Oynatıcı + olay zaman çizgisi + VLM açıklamaları. `timeline.js` ve `overlay.js` burada buluşuyor |
+| **`objects.js`** | 632 | `#/objects/:id` | Track listesi, PAR araması, bestshot ızgarası, kullanıcının atadığı renklerle timeline şeritleri |
+| **`manage.js`** | 355 | `#/manage` | Grup/video CRUD + analiz kuyruğu (3 sn'de bir yoklama) |
+| **`home.js`** | 119 | `#/home` | Sunucu sağlığı, 5 sn'de bir `/status/health` |
+| **`system.js`** | 84 | `#/system` | Worker durumları |
+| **`login.js`** | 43 | `#/login` | Giriş formu (backend henüz doğrulama istemiyor) |
+
+---
+
+## backend.js — neden bu kadar büyük
+
+Arayüzün geri kalanı temiz kalsın diye backend'in bütün tuhaflıkları tek
+dosyada toplanıyor. Ekranlar `api.objects(videoId, {cls, par})` çağırıyor,
+altında ne döndüğünü bilmiyor:
+
+- **Zaman birimi** — `timestamp` bir dönem saniye, bir dönem 1/30000 zaman
+  tabanıydı (kare başına 1001 birim). `tsToSec()` ikisini de tanıyor.
+  `frame_index` zaman için **kullanılmıyor**: analiz hattı 37.2 kare/sn
+  sayıyor, video gerçekte 30 fps
+- **Sınıf adı** — uç `class_name` vermiyor, yalnızca `class_id`. Ad tablosu
+  burada; ilk aramada `[backend] sınıf dağılımı` konsola yazılıyor
+- **Sınıf süzgeci** — uçta `class_id` parametresi yok, süzme istemcide
+- **PAR süzgeci** — `matched_attribute` hep `null` dönüyor, süzme
+  `par.attributes` sözlüğünün üstünde yapılıyor
+- **Lifecycle** — liste ucu track'in giriş/çıkış zamanını vermiyorsa ayrıntı
+  ucundan sekizerli havuzla tamamlanıyor, sonuç önbelleğe alınıyor
+- **Proxy tazeliği** — proxy kaydının içinde kaynağın `guid_id` imzası var;
+  backend sıfırlanıp id'ler yeniden kullanılırsa eski proxy reddediliyor
+
+### FEATURES bayrakları
+
+`core.js` başındaki bu nesne, backend'in henüz veremediği yetenekleri kapalı
+tutuyor. Kod yazılmış ve duruyor; bayrak `true` olunca çiziliyor.
+
+| Bayrak | Durum | Neyi bekliyor |
 |---|---|---|
-| `#/single/CAM01` | 단일 영상 요약 | Oynatıcı + bbox overlay + timeline + olay akışı + 이벤트 검색 + 후보 점수 |
-| `#/multi/G1` | 복합 상황 요약 | Kamera başına satır (swimlane), `event_group_id` ile aynı sahne |
-| `#/objects/CAM01` | 객체 목록 + Re-ID | ⏸ **gizli** — `ff.reid` bayrağıyla açılır |
-| `#/jobs` | 작업 관리 | İş geçmişi, ilerleme çubukları, iptal, hata detayı |
-| `#/system` | 시스템 | GPU/RAM/disk göstergeleri (2 sn'de bir), log görüntüleyici |
-| `#/settings` | 설정 | Özet, aday eşiği, model seçimi, oynatma, dil |
-| `#/api` | API 계약 | 34 endpoint + veri formatı — **backend'e verilecek liste** |
+| `objects` | **açık** | — |
+| `bbox` | kapalı | `/playback/groups/{gid}/bboxes` JSON çıktısı (şu an msgpack, grup kapsamlı) |
+| `reid` | kapalı | analiz hattında embedding üretimi |
+| `map`, `eventSearch`, `eventStatus`, `snapshot` | kapalı | karşılığı olan uç yok |
 
-Sağ üstteki **KO / TR** düğmesi arayüz dilini değiştirir.
+Konsoldan geçici olarak açmak için:
 
-### Denemeye değer akışlar
-
-**1. 이벤트 검색 + 후보 구간 점수**
-`#/single/CAM02` → arama kutusuna `탑승` yazın; sonuç anında gelir.
-Sonra `◍ 후보 점수` butonuna basın: hangi pencerenin hangi metrik yüzünden
-VLM'e gönderildiği tablo hâlinde. Timeline'ın üst şeridi bu skorların
-görselleştirmesi, kesik kırmızı çizgi eşik.
-
-**2. Olay onaylama (`event_status`)**
-Olay listesinde `확정` / `오탐` butonları. AI önerir, operatör onaylar.
-`dismissed` olaylar soluklaşır ama silinmez — denetim izi kalır.
-
-**3. Gerçek SOLIDER verisi** (Re-ID açıksa)
-`#/objects/CAM20` → 165 gerçek kırpma görüntüsü → gerçek 1024-d vektörler
-üzerinde gerçek kosinüs araması.
-
-**4. Overlay doğruluğu**
-Oynatıcıda `b` tuşu bbox'ları açıp kapatır. Pencereyi yeniden boyutlandırın,
-tam ekrana geçin — kutular kaymamalı (letterbox hesabı). Bir kutuya tıklayın
-→ nesne detayı açılır.
-
-**5. Kenar durumlar**
-`#/single/CAM09` (failed) → hata mesajı. `#/single/CAM05` (proxy yok) →
-neden oynatılamadığı, kodek/faststart/GOP tanısıyla birlikte açıklanır ama
-timeline çalışmaya devam eder.
-
-**Klavye:** `boşluk` oynat/duraklat · `←/→` 5 sn (Shift ile 1 sn) ·
-`n/p` sonraki/önceki olay · `b` bbox
+```js
+localStorage.setItem('ff.bbox', '1'); location.reload();
+```
 
 ---
 
-## Kendi videonu ekle
+## Backend'den beklenenler
+
+| İstek | Bugün | Kazanç |
+|---|---|---|
+| `class_name` alanı | yalnızca `class_id` | çeviri tablosu kalkar |
+| `/tracks?class_id=` | uç sınıfa göre süzmüyor | süzme sunucuya geçer, `limit` anlam kazanır |
+| Çoklu PAR süzgeci | tek etiket, `matched_attribute` null | süzme sunucuya geçer |
+| bbox ucu JSON | msgpack, grup kapsamlı | `FEATURES.bbox` açılır |
+
+---
+
+## Oynatma
+
+VMS kayıtları AVI + MPEG-4 Part 2 — tarayıcı ikisini de açamaz. Backend
+`playback_uri` verene kadar yerel proxy üretiyoruz:
 
 ```bash
-python tools/add_video.py "D:\kayit.mp4" --motion --name Camera99 \
-       --start "2025-05-20T09:00:00"
+python tools/proxy_cache.py --list     # durum tablosu
+python tools/proxy_cache.py --all      # eksik/bayat olanları üret
 ```
 
-Yaptıkları:
+Proxy kaydının içinde kaynağın `guid_id` imzası duruyor; backend sıfırlanıp
+video id'leri yeniden kullanılırsa eski proxy otomatik bayat sayılıp yeniden
+üretiliyor. Remux sonrası çıktı gerçekten çözülüyor — AVI içindeki bazı H.264
+akışları (data partitioning, çift DTS) remux'la kurtarılamıyor, o durumda
+otomatik yeniden kodlamaya düşülüyor.
 
-1. `ffprobe` ile gerçek metadata okur (kaynak HEVC/MJPEG ise uyarır)
-2. **Önce remux dener** — kaynak H.264 + yuv420p ise yeniden kodlama yok,
-   sadece MP4'e sarma + `-movflags +faststart`. 30 dakikalık video için
-   90 saniye yerine ~2 saniye, kalite kaybı sıfır. Koşullar sağlanmazsa
-   `libx264` ile yeniden kodlar (1 sn GOP → hassas seek).
-   `--force-encode` ile remux'u atlayabilirsin.
-   Ayrıntı: [`PROJE-NOTLARI.md` §9.5](PROJE-NOTLARI.md)
-3. `--motion` ile hareket tabanlı sözde-tespit üretir: kare farkı → kaba
-   ızgara → bağlı bileşen → IoU eşlemeli takip. **Bu bir Object Detection
-   değildir**, ama kutular gerçekten hareket eden bölgeleri izler, yani
-   overlay/timeline/nesne listesi kendi videonuzda uçtan uca çalışır.
-   (Doğruluk kontrolü: sentetik CAM03'e uygulandığında kutular gerçek
-   yörüngeyle x ekseninde ~0.02 sapmayla örtüşüyor.)
-4. Katalogu günceller → sol ağaçta yeni kamera belirir
+---
+
+## Hata ayıklama
+
+Sunucu `/live` trafiğini iki yere yazabiliyor ve ikisi aynı şey değil.
+
+**Terminal** — okunur kalsın diye süzülüyor: kırpım ve stream istekleri hiç
+yazılmıyor, gövdeler 800 karakterde kesiliyor. Aradığın cevabı daralt:
 
 ```bash
-python tools/add_video.py --list        # kayıtlı videolar
-python tools/add_video.py --remove CAM95
+python server.py --live-only /analysis --live-body -1
 ```
 
-Sunucuyu yeniden başlatın (katalog açılışta okunuyor).
+**Dosya** — süzgeç yok, kırpma yok, her istek zaman damgalı:
 
----
-
-## Dosya haritası
-
-```
-vid/
-├── PROJE-NOTLARI.md        Tasarım kararları, gerekçeler, backend'e sorular
-├── README.md               Bu dosya
-├── start.bat               Tek tıkla çalıştır
-├── server.py               Mock API sunucusu (stdlib + numpy, bağımlılık yok)
-│                             · Range destekli statik servis
-│                             · 36 endpoint
-│                             · SSE ile iş ilerlemesi ve Re-ID akışı
-│                             · gerçek kosinüs Re-ID
-├── tools/
-│   ├── gen_mock.py         Veri seti üretici (senaryo, PAR, aday skorları)
-│   ├── gen_video.py        Sentetik CCTV videosu (PIL → ffmpeg)
-│   ├── add_video.py        Kendi videonu ekle (+ hareket tabanlı bbox)
-│   └── smoke_test.py       132 uçtan uca kontrol
-└── mock/
-    ├── index.html
-    ├── css/app.css         Tasarım sistemi (Tailwind token'larına birebir çevrilir)
-    ├── lab/                12 derslik öğrenme laboratuvarı (beyaz sayfa)
-    ├── js/
-    │   ├── core.js         DOM yardımcıları, store, i18n, TimeMapper, API, FEATURES
-    │   ├── overlay.js      Canvas bbox katmanı (letterbox, rVFC, DPI, hit test)
-    │   ├── timeline.js     Canvas zaman ekseni (zoom/pan, swimlane, ısı haritası)
-    │   └── app.js          Yönlendirici + 7 ekran
-    ├── data/               Üretilen JSON + embeddings.f32 (181 × 1024 float32)
-    │   └── catalog_user.json   add_video.py ile eklenenler — gen_mock.py bunu ezmez
-    └── assets/
-        ├── cam0X.mp4       Sentetik CCTV (H.264, faststart, 1 sn GOP)
-        ├── crops/          128px nesne kırpmaları (165'i gerçek SOLIDER verisi)
-        ├── thumbs/         Olay küçük görselleri
-        └── poster/         Video poster kareleri
+```bash
+python server.py --log-file live.log
 ```
 
----
+Terminalde akıp giden bir şeyi geri saramıyorsun; dosyada `grep` atarsın:
 
-## Bu mockup'ın kanıtladığı mimari kararlar
+```bash
+grep -A30 'POST .*/analysis' live.log      # analiz isteğinin tam cevabı
+grep '✗' live.log                          # yalnızca hatalar
+```
 
-Bunlar tartışma konusu değil artık — çalışan kod var:
-
-1. **Aday seçimi kara kutu olmamalı.** `event_candidate_score` verisi UI'ya
-   açıldığında operatör "bu neden seçildi" sorusunu kendisi cevaplayabiliyor.
-   Güven buradan geliyor.
-2. **BBox ekranda overlay, export'ta burn-in.** Filtreleme, aç/kapa,
-   tıklanabilirlik, yeniden analiz sonrası tutarlılık — hepsi overlay
-   sayesinde.
-
-2b. **Normalize `xywh`.** DB şemasıyla birebir (`bbox_x/y/width/height`,
-   `numeric(10,7)`, `0~1 정규화`). Frontend tek bir yerde `xyxy`'ye çevirir.
-3. **Koordinatlar normalize (0–1).** Pencere boyutundan, tam ekrandan,
-   DPI'dan bağımsız çalışıyor.
-4. **Detection satır dizisi olarak, zaman aralığına göre sayfalı.**
-   Nesne dizisi yerine satır dizisi JSON'u ~⅓'e indiriyor.
-5. **Uzun işler için SSE yeterli.** Analiz ilerlemesi SSE ile çalışıyor.
-   Backend alarm/bildirim tarafını WebSocket ile yapacak — mesaj gövdeleri
-   aynı kaldığı için değişecek tek yer `core.js → listen()`.
-6. **Özellikler bayrakla kapatılabilmeli.** Re-ID kodda duruyor ama
-   `FEATURES.reid = false`. Backend hazır olunca tek satır değişiyor —
-   kod silinip yeniden yazılmıyor.
-7. **`video_status` UI'ın omurgası.** Ağaç ikonu, tıklanabilirlik, hata
-   mesajı, ilerleme çubuğu — hepsi tek enum'dan türüyor.
+İkisi birlikte de kullanılabilir: terminal `--live-only` ile dar kalır, dosya
+yine her şeyi alır. Dosya `a` kipinde açılıyor, her çalıştırma başına ayırıcı
+bir başlık düşüyor.
 
 ---
 
-## Backend'e ne verilecek
+## Depoya girmeyenler
 
-`#/api` ekranını açın (veya `curl http://127.0.0.1:8000/api/openapi`).
-36 endpoint, istek/cevap şekilleri ve veri formatı kuralları orada.
+Bu depo yalnızca çalışan arayüzü taşıyor. Aşağıdakiler yerel diskte duruyor
+ama `.gitignore` ile dışarıda:
 
-Backend FastAPI ile bunları yazdığında `/docs` (Swagger UI) otomatik oluşur ve
-frontend'in `core.js` içindeki `BASE = '/api'` sabiti dışında hiçbir şey
-değişmez.
+| Yol | Neden |
+|---|---|
+| `docs/` | rehberler, notlar, Postman koleksiyonu, playback test sayfası |
+| `archive/mock/` | 2026-08'de kaldırılan mock katmanı — referans |
+| `web/assets/` | üretilen proxy MP4'ler ve küçük resimler (200 MB+) |
+| `*.avi`, `*.mp4`, `*.bat` | örnek videolar, kişiye özel başlatma betiği |
 
-Cevaplanması gereken sorular `PROJE-NOTLARI.md` bölüm 19'da, her biri
-"neden soruyorum" gerekçesiyle ve 🔴🟡🟢 önceliklendirmesiyle listeli.
-
----
-
-## Bilinen sınırlar
-
-- Sentetik CCTV sahneleri stilize (basit geometrik figürler) — amaç görsel
-  gerçekçilik değil, metadata ile birebir hizalı bir doğrulama zemini.
-- VLM açıklamaları önceden yazılmış; yeni bir durumu tarif etmez.
-- Arama yalnızca VLM'in yazdığını bulur. Görsel arama yok — bu bir eksiklik
-  değil, verilen mimari karar.
-- `deleted` durumu ve mantıksal silme akışı UI'da yok (backend zaten
-  filtreliyor varsayıldı — bu `PROJE-NOTLARI.md` Soru 17).
-- Sanallaştırılmış liste yerine `loading="lazy"` kullanıldı; 165 crop için
-  yeterli, on binlerce crop'ta windowing gerekir.
-- Kimlik doğrulama sahte: token üretiliyor ama doğrulanmıyor.
+`docs/ARAYUZ-REHBERI.md` dosya dosya, blok blok arayüz rehberi — arayüzü
+öğrenmenin başlangıç noktası o.

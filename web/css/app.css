@@ -1,0 +1,1050 @@
+/* ============================================================================
+   지능형 영상 요약 플랫폼 — Tasarım sistemi
+   ----------------------------------------------------------------------------
+   Üretimde Tailwind kullanılacak. Buradaki her custom property bir Tailwind
+   token'ına, her .cls bir @apply bloğuna birebir çevrilir. Karşılıklar
+   yorumlarda belirtildi.
+
+   Kontrol odası estetiği: koyu, düşük parlaklık, tek vurgu rengi,
+   durum renkleri anlam taşır (asla dekoratif kullanılmaz).
+   ========================================================================= */
+
+:root {
+  /* --- yüzeyler (Tailwind: slate-950..800 karşılığı) -------------------- */
+  --bg-0:      #0a0e14;   /* sayfa zemini            */
+  --bg-1:      #10161f;   /* panel                   */
+  --bg-2:      #161e2a;   /* yükseltilmiş yüzey      */
+  --bg-3:      #1d2837;   /* hover / seçili          */
+  --bg-inset:  #070a0f;   /* video kuyusu, kod bloğu */
+
+  --line:      #223046;
+  --line-soft: #1a2433;
+
+  /* --- metin ------------------------------------------------------------ */
+  --tx-0: #e8eef6;
+  --tx-1: #a3b3c8;
+  --tx-2: #6b7c92;
+  --tx-3: #45566c;
+
+  /* --- vurgu ------------------------------------------------------------ */
+  --ac:      #38bdf8;
+  --ac-dim:  #0e7490;
+  --ac-soft: rgba(56, 189, 248, .12);
+  --ac-line: rgba(56, 189, 248, .38);
+
+  /* --- durum ------------------------------------------------------------ */
+  --ok:   #22c55e;
+  --warn: #f59e0b;
+  --crit: #ef4444;
+  --info: #64748b;
+  --busy: #eab308;
+
+  /* --- ölçü -------------------------------------------------------------- */
+  --r-sm: 4px;
+  --r:    7px;
+  --r-lg: 11px;
+  --gap:  10px;
+
+  --sidebar-w: 268px;
+  --events-w:  330px;
+  --topbar-h:  48px;
+
+  --mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", "Consolas",
+          "Liberation Mono", monospace;
+  --sans: "Malgun Gothic", -apple-system, BlinkMacSystemFont, "Segoe UI",
+          Roboto, "Helvetica Neue", "Noto Sans KR", sans-serif;
+
+  --shadow: 0 8px 30px rgba(0, 0, 0, .55);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  background: var(--bg-0); color: var(--tx-0);
+  font-family: var(--sans);
+  font-size: 13px; line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; border: none; background: none; }
+a { color: var(--ac); text-decoration: none; }
+::selection { background: var(--ac-line); }
+
+/* ince kaydırma çubuğu */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #263447; border-radius: 5px; border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: #34465e; background-clip: padding-box; }
+
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--tx-2); }
+.dim   { color: var(--tx-1); }
+.tiny  { font-size: 11px; }
+.nowrap { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.grow { flex: 1; }
+.row { display: flex; align-items: center; gap: 8px; }
+.col { display: flex; flex-direction: column; }
+.hidden { display: none !important; }
+.center { display: flex; align-items: center; justify-content: center; }
+
+/* ==========================================================================
+   Uygulama iskeleti
+   ========================================================================== */
+
+#app { height: 100vh; display: flex; flex-direction: column; }
+
+.topbar {
+  height: var(--topbar-h); flex: 0 0 var(--topbar-h);
+  display: flex; align-items: center; gap: 14px;
+  padding: 0 14px;
+  background: linear-gradient(180deg, #131b26, #0e141d);
+  border-bottom: 1px solid var(--line);
+  z-index: 40;
+}
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 700;
+         letter-spacing: -.2px; font-size: 14px; }
+.brand .logo {
+  width: 24px; height: 24px; border-radius: 6px;
+  background: linear-gradient(135deg, var(--ac), #6366f1);
+  display: grid; place-items: center; color: #051019; font-size: 13px;
+  font-weight: 900;
+}
+.navtabs { display: flex; gap: 2px; margin-left: 10px; }
+.navtabs a {
+  padding: 6px 12px; border-radius: var(--r-sm); color: var(--tx-1);
+  font-size: 12.5px; font-weight: 600; white-space: nowrap;
+}
+.navtabs a:hover { background: var(--bg-2); color: var(--tx-0); }
+.navtabs a.on { background: var(--ac-soft); color: var(--ac);
+                box-shadow: inset 0 0 0 1px var(--ac-line); }
+
+.main { flex: 1; display: flex; min-height: 0; }
+
+/* ==========================================================================
+   Paneller
+   ========================================================================== */
+
+.panel {
+  background: var(--bg-1); border: 1px solid var(--line);
+  border-radius: var(--r); display: flex; flex-direction: column;
+  min-height: 0; overflow: hidden;
+}
+.panel-h {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 11px; border-bottom: 1px solid var(--line-soft);
+  font-size: 11.5px; font-weight: 700; letter-spacing: .4px;
+  color: var(--tx-1); text-transform: uppercase;
+  background: linear-gradient(180deg, rgba(255,255,255,.022), transparent);
+  flex: 0 0 auto;
+}
+.panel-b { flex: 1; overflow: auto; min-height: 0; }
+
+.sidebar {
+  width: var(--sidebar-w); flex: 0 0 var(--sidebar-w);
+  display: flex; flex-direction: column; gap: var(--gap);
+  padding: var(--gap); padding-right: 0; min-height: 0;
+}
+.stage {
+  flex: 1; display: flex; flex-direction: column;
+  gap: var(--gap); padding: var(--gap); min-width: 0; min-height: 0;
+}
+.rightbar {
+  width: var(--events-w); flex: 0 0 var(--events-w);
+  display: flex; flex-direction: column; gap: var(--gap);
+  padding: var(--gap); padding-left: 0; min-height: 0;
+}
+
+/* ==========================================================================
+   Ağaç (영상 그룹)
+   ========================================================================== */
+
+.tree { padding: 4px 0; }
+.tree-group {
+  display: flex; align-items: center; gap: 7px;
+  padding: 7px 11px; cursor: pointer; user-select: none;
+  font-weight: 700; font-size: 12.5px; color: var(--tx-1);
+}
+.tree-group:hover { background: var(--bg-2); color: var(--tx-0); }
+.tree-group .caret {
+  width: 11px; font-size: 9px; color: var(--tx-3);
+  transition: transform .14s ease;
+}
+.tree-group.open .caret { transform: rotate(90deg); }
+.tree-group .gsub { font-weight: 500; color: var(--tx-3); font-size: 11px; }
+
+.tree-cam {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 11px 6px 30px; cursor: pointer;
+  border-left: 2px solid transparent; font-size: 12.5px;
+}
+.tree-cam:hover { background: var(--bg-2); }
+.tree-cam.on {
+  background: var(--ac-soft); border-left-color: var(--ac); color: var(--ac);
+}
+.tree-cam.disabled { opacity: .55; cursor: not-allowed; }
+.tree-cam .nm { flex: 1; overflow: hidden; text-overflow: ellipsis;
+                white-space: nowrap; }
+.tree-cam .pl { font-size: 10.5px; color: var(--tx-3); }
+.tree-cam.on .pl { color: var(--ac-dim); }
+
+/* durum noktası — video_status enum'unun görsel karşılığı */
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 8px;
+       box-shadow: 0 0 0 2px rgba(0,0,0,.35); }
+.dot.registered { background: var(--tx-3); }
+.dot.uploading  { background: var(--tx-2); }
+.dot.ready      { background: var(--ac); }
+.dot.analyzing  { background: var(--busy); animation: pulse 1.25s infinite; }
+.dot.completed  { background: var(--ok); }
+.dot.failed     { background: var(--crit); }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+
+.srcicon { font-size: 10px; color: var(--tx-3); width: 12px; text-align: center; }
+
+.mini-prog {
+  height: 3px; background: var(--bg-3); border-radius: 2px;
+  overflow: hidden; margin: 3px 11px 3px 30px;
+}
+.mini-prog i { display: block; height: 100%; background: var(--busy);
+               transition: width .4s ease; }
+
+/* ==========================================================================
+   Filtre paneli (객체 필터)
+   ========================================================================== */
+
+.filter { padding: 11px; display: flex; flex-direction: column; gap: 11px; }
+.fgroup { display: flex; flex-direction: column; gap: 6px; }
+.flabel { font-size: 11px; color: var(--tx-2); font-weight: 600; }
+
+.seg { display: flex; gap: 3px; background: var(--bg-inset);
+       padding: 3px; border-radius: var(--r-sm); }
+.seg button {
+  flex: 1; padding: 5px 4px; border-radius: 3px; font-size: 11.5px;
+  color: var(--tx-2); font-weight: 600; transition: all .12s;
+}
+.seg button:hover { color: var(--tx-0); background: var(--bg-2); }
+.seg button.on { background: var(--ac-soft); color: var(--ac);
+                 box-shadow: inset 0 0 0 1px var(--ac-line); }
+
+.swatches { display: flex; flex-wrap: wrap; gap: 5px; }
+.sw {
+  width: 20px; height: 20px; border-radius: 50%;
+  border: 2px solid transparent; outline: 1px solid rgba(255,255,255,.13);
+  transition: transform .12s;
+}
+.sw:hover { transform: scale(1.15); }
+.sw.on { border-color: var(--ac); outline-color: var(--ac); transform: scale(1.1); }
+.sw.all {
+  width: auto; padding: 0 8px; height: 20px; border-radius: 10px;
+  background: var(--bg-3); font-size: 10.5px; color: var(--tx-1);
+}
+
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip {
+  padding: 3px 9px; border-radius: 11px; font-size: 11px;
+  background: var(--bg-inset); color: var(--tx-2);
+  box-shadow: inset 0 0 0 1px var(--line-soft); font-weight: 600;
+}
+.chip:hover { color: var(--tx-0); }
+.chip.on { background: var(--ac-soft); color: var(--ac);
+           box-shadow: inset 0 0 0 1px var(--ac-line); }
+
+/* ==========================================================================
+   Butonlar / girdiler
+   ========================================================================== */
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 7px 13px; border-radius: var(--r-sm);
+  background: var(--bg-3); color: var(--tx-0);
+  font-size: 12px; font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--line);
+  transition: all .12s; white-space: nowrap;
+}
+.btn:hover { background: #26374d; }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn.pri { background: var(--ac); color: #04121b;
+           box-shadow: 0 1px 12px rgba(56,189,248,.28); }
+.btn.pri:hover { background: #5cc9fa; }
+.btn.ghost { background: transparent; box-shadow: inset 0 0 0 1px var(--line); }
+.btn.ghost:hover { background: var(--bg-2); }
+.btn.danger { background: rgba(239,68,68,.14); color: #fca5a5;
+              box-shadow: inset 0 0 0 1px rgba(239,68,68,.35); }
+.btn.sm { padding: 4px 9px; font-size: 11px; }
+.btn.wide { width: 100%; }
+
+.input, .select, .textarea {
+  width: 100%; padding: 7px 10px; border-radius: var(--r-sm);
+  background: var(--bg-inset); color: var(--tx-0);
+  border: 1px solid var(--line); outline: none; font-size: 12.5px;
+  transition: border-color .12s, box-shadow .12s;
+}
+.input:focus, .select:focus, .textarea:focus {
+  border-color: var(--ac-line); box-shadow: 0 0 0 3px var(--ac-soft);
+}
+.input::placeholder { color: var(--tx-3); }
+.textarea { resize: vertical; min-height: 58px; font-family: var(--sans); }
+
+.search-wrap { position: relative; }
+.search-wrap .ico {
+  position: absolute; right: 9px; top: 50%; transform: translateY(-50%);
+  color: var(--tx-3); font-size: 12px; pointer-events: none;
+}
+
+/* ==========================================================================
+   Üst şerit (영상 정보)
+   ========================================================================== */
+
+.hdr {
+  background: var(--bg-1); border: 1px solid var(--line);
+  border-radius: var(--r); padding: 10px 14px; flex: 0 0 auto;
+}
+.hdr-top { display: flex; align-items: center; gap: 10px; }
+.crumb { display: flex; align-items: center; gap: 7px;
+         font-size: 15px; font-weight: 700; }
+.crumb .sep { color: var(--tx-3); font-weight: 400; }
+.crumb .cur { color: var(--tx-0); }
+.crumb .par { color: var(--tx-2); font-weight: 600; font-size: 13.5px; }
+
+.badge {
+  padding: 2px 8px; border-radius: 10px; font-size: 10.5px; font-weight: 700;
+  letter-spacing: .2px;
+}
+.badge.completed { background: rgba(34,197,94,.15); color: #86efac; }
+.badge.analyzing { background: rgba(234,179,8,.15); color: #fde047; }
+.badge.ready     { background: rgba(56,189,248,.15); color: #7dd3fc; }
+.badge.failed    { background: rgba(239,68,68,.15); color: #fca5a5; }
+.badge.registered{ background: rgba(100,116,139,.18); color: #cbd5e1; }
+.badge.real      { background: rgba(168,85,247,.16); color: #d8b4fe; }
+
+.hdr-sub { margin-top: 3px; display: flex; align-items: center; gap: 8px;
+           font-size: 11.5px; color: var(--tx-2); }
+.hdr-sub b { color: var(--tx-1); font-weight: 600; }
+
+/* ==========================================================================
+   Video sahnesi
+   ========================================================================== */
+
+.videobox {
+  position: relative; flex: 1; min-height: 0;
+  background: var(--bg-inset); border: 1px solid var(--line);
+  border-radius: var(--r); overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.vwell {
+  position: relative; flex: 1; min-height: 0; overflow: hidden;
+  display: grid; place-items: center; background: #04070b;
+}
+.vstack { position: relative; line-height: 0; max-width: 100%; max-height: 100%; }
+.vstack video { display: block; max-width: 100%; max-height: 100%;
+                width: auto; height: auto; }
+
+/* Video varken kuyunun TAMAMINI kapla ve object-fit ile içine sığdır.
+   Neden: `.vstack` yüksekliği içeriğe bağlıydı, dolayısıyla videodaki
+   `max-height: 100%` yüzdesi çözümsüz kalıp yok sayılıyordu. 1080p kayıt
+   doğal boyutunda render edilip kuyudan taşıyor, `.vwell` konumlandırılmış
+   olduğu için de altındaki kontrol çubuğunun üstüne boyanıyordu — düğmeler
+   oradaydı ama görünmüyordu. 704x480 gibi küçük kayıtlarda sığdığı için
+   sorun yalnızca büyük çözünürlüklerde ortaya çıkıyordu.
+   overlay.js zaten object-fit:contain letterbox'ını hesaplıyor (geom()),
+   yani kutular hizalı kalır. */
+.vstack.fill { width: 100%; height: 100%; }
+.vstack.fill video { width: 100%; height: 100%; object-fit: contain;
+                     max-width: none; max-height: none; }
+.vstack canvas.ovl {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  pointer-events: none;
+}
+.vstack canvas.ovl.hit { pointer-events: auto; cursor: crosshair; }
+
+.noproxy {
+  padding: 40px 28px; text-align: center; color: var(--tx-2);
+  display: flex; flex-direction: column; gap: 10px; align-items: center;
+  max-width: 460px;
+}
+.noproxy .big { font-size: 34px; opacity: .35; }
+.noproxy .t { color: var(--tx-1); font-weight: 700; font-size: 14px; }
+
+.vhud {
+  position: absolute; left: 10px; top: 10px; display: flex; gap: 6px;
+  z-index: 3; flex-wrap: wrap; max-width: calc(100% - 20px);
+}
+.vhud .pill {
+  background: rgba(4,8,13,.78); backdrop-filter: blur(6px);
+  padding: 3px 9px; border-radius: 4px; font-size: 11px;
+  color: var(--tx-1); box-shadow: inset 0 0 0 1px rgba(255,255,255,.07);
+}
+.vhud .pill b { color: var(--tx-0); }
+
+/* oynatıcı kontrolleri */
+.vctl {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 9px;
+  padding: 8px 11px; background: var(--bg-1);
+  border-top: 1px solid var(--line-soft);
+}
+.iconbtn {
+  width: 30px; height: 30px; border-radius: var(--r-sm);
+  display: grid; place-items: center; color: var(--tx-1); font-size: 14px;
+  transition: all .12s;
+}
+.iconbtn:hover { background: var(--bg-3); color: var(--tx-0); }
+.iconbtn.on { background: var(--ac-soft); color: var(--ac); }
+
+.scrub {
+  flex: 1; height: 26px; position: relative; cursor: pointer;
+  display: flex; align-items: center;
+}
+.scrub .track {
+  position: absolute; left: 0; right: 0; height: 5px; border-radius: 3px;
+  background: var(--bg-3); overflow: hidden;
+}
+.scrub .buf  { position: absolute; height: 100%; background: #2b3b50; }
+.scrub .fill { position: absolute; height: 100%; background: var(--ac); }
+.scrub .knob {
+  position: absolute; width: 12px; height: 12px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.6);
+  transform: translateX(-50%); pointer-events: none;
+}
+/* olay işaretleri — ilerleme çubuğunun üstünde */
+.scrub .evmark {
+  position: absolute; bottom: 17px; width: 3px; height: 8px; border-radius: 1px;
+  opacity: .85; transform: translateX(-50%);
+}
+.scrub .evmark:hover { opacity: 1; height: 11px; }
+
+.tcode { font-family: var(--mono); font-size: 12px; color: var(--tx-1);
+         white-space: nowrap; }
+.tcode b { color: var(--tx-0); }
+
+/* ==========================================================================
+   Timeline (canvas)
+   ========================================================================== */
+
+.tlwrap { flex: 0 0 auto; }
+.tlbar {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.tlcanvas { display: block; width: 100%; cursor: crosshair; }
+.tlhint { font-size: 10.5px; color: var(--tx-3); padding: 4px 10px 6px; }
+
+/* ==========================================================================
+   Özet bilgi kutusu (요약 정보)
+   ========================================================================== */
+
+.statgrid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 1px; background: var(--line-soft);
+}
+.stat { background: var(--bg-1); padding: 9px 12px; }
+.stat .k { font-size: 10.5px; color: var(--tx-2); margin-bottom: 2px; }
+.stat .v { font-size: 14px; font-weight: 700; font-family: var(--mono);
+           color: var(--tx-0); }
+.stat .v small { font-size: 11px; color: var(--tx-2); font-weight: 500; }
+
+/* ==========================================================================
+   Olay listesi (시간별 사건 흐름)
+   ========================================================================== */
+
+.evlist { padding: 4px 0; }
+.evitem {
+  display: flex; gap: 10px; padding: 9px 11px; cursor: pointer;
+  position: relative; border-left: 2px solid transparent;
+}
+.evitem:hover { background: var(--bg-2); }
+.evitem.on { background: var(--ac-soft); border-left-color: var(--ac); }
+.evitem .rail {
+  position: absolute; left: 17px; top: 0; bottom: 0; width: 1px;
+  background: var(--line);
+}
+.evitem:first-child .rail { top: 18px; }
+.evitem:last-child  .rail { bottom: calc(100% - 18px); }
+.evitem .bullet {
+  width: 9px; height: 9px; border-radius: 50%; margin-top: 5px;
+  flex: 0 0 9px; z-index: 1; box-shadow: 0 0 0 3px var(--bg-1);
+}
+.evitem.on .bullet { box-shadow: 0 0 0 3px var(--bg-2), 0 0 10px currentColor; }
+.evbody { flex: 1; min-width: 0; }
+.evtime { font-family: var(--mono); font-size: 11.5px; color: var(--ac);
+          font-weight: 700; }
+.evitem:not(.on) .evtime { color: var(--tx-1); }
+.evdesc { font-size: 12px; color: var(--tx-1); margin-top: 2px;
+          line-height: 1.45; }
+.evmeta { display: flex; gap: 5px; align-items: center; margin-top: 4px;
+          flex-wrap: wrap; }
+.evtag {
+  font-size: 9.5px; padding: 1px 6px; border-radius: 8px; font-weight: 700;
+  background: rgba(255,255,255,.06);
+}
+.evthumb {
+  width: 68px; height: 42px; border-radius: var(--r-sm); object-fit: cover;
+  background: var(--bg-inset); flex: 0 0 68px;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+/* ==========================================================================
+   Prompt arama
+   ========================================================================== */
+
+.promptbar {
+  display: flex; gap: 8px; padding: 9px 11px;
+  border-bottom: 1px solid var(--line-soft); align-items: center;
+}
+.searchstate {
+  padding: 8px 11px; font-size: 11.5px; color: var(--tx-2);
+  border-bottom: 1px solid var(--line-soft);
+  display: flex; flex-direction: column; gap: 5px;
+}
+.pipeline { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pstep {
+  display: flex; align-items: center; gap: 5px; padding: 3px 8px;
+  border-radius: 11px; font-size: 10.5px; font-weight: 700;
+  background: var(--bg-inset); color: var(--tx-3);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+}
+.pstep.act { color: var(--busy); box-shadow: inset 0 0 0 1px rgba(234,179,8,.4); }
+.pstep.done { color: var(--ok); box-shadow: inset 0 0 0 1px rgba(34,197,94,.32); }
+.pstep .n { opacity: .6; }
+.parrow { color: var(--tx-3); font-size: 10px; }
+
+.wordchips { display: flex; gap: 4px; flex-wrap: wrap; }
+.wordchip {
+  font-size: 10px; padding: 1px 6px; border-radius: 8px;
+  background: rgba(56,189,248,.1); color: #7dd3fc;
+}
+
+.vlmrow {
+  display: flex; gap: 9px; padding: 8px 11px; align-items: flex-start;
+  border-bottom: 1px solid var(--line-soft); cursor: pointer;
+}
+.vlmrow:hover { background: var(--bg-2); }
+.vlmrow .verdict {
+  font-size: 9.5px; font-weight: 800; padding: 2px 6px; border-radius: 4px;
+  flex: 0 0 auto; margin-top: 1px;
+}
+.verdict.yes     { background: rgba(34,197,94,.16); color: #86efac; }
+.verdict.partial { background: rgba(234,179,8,.16); color: #fde047; }
+.verdict.no      { background: rgba(100,116,139,.16); color: #94a3b8; }
+
+.scorebar {
+  height: 3px; border-radius: 2px; background: var(--bg-3);
+  overflow: hidden; margin-top: 5px;
+}
+.scorebar i { display: block; height: 100%; background: var(--ac); }
+
+/* ==========================================================================
+   Nesne grid'i + Re-ID
+   ========================================================================== */
+
+.objgrid {
+  display: grid; gap: 8px; padding: 11px;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+}
+.objcard {
+  background: var(--bg-2); border-radius: var(--r);
+  overflow: hidden; cursor: pointer; position: relative;
+  box-shadow: inset 0 0 0 1px var(--line); transition: all .12s;
+}
+.objcard:hover { box-shadow: inset 0 0 0 1px var(--ac-line);
+                 transform: translateY(-2px); }
+.objcard.on { box-shadow: inset 0 0 0 2px var(--ac); }
+/* `contain`: kırpımın TAMAMI görünsün. `cover` iken üst ve alt kesiliyordu —
+   bir kişiyi tanımak için gereken şey tam da baş ve ayak. Kutu oranı sabit
+   kalıyor, artan yer koyu zemin oluyor. */
+.objcard .im {
+  width: 100%; aspect-ratio: 1/1.7; object-fit: contain; display: block;
+  background: var(--bg-inset);
+}
+.objcard .cap { padding: 5px 7px; font-size: 10px; color: var(--tx-2);
+                line-height: 1.35; }
+.objcard .cap .t { font-family: var(--mono); color: var(--tx-1);
+                   font-size: 10.5px; }
+.objcard .simbadge {
+  position: absolute; right: 4px; top: 4px; padding: 1px 6px;
+  border-radius: 8px; font-size: 10px; font-weight: 800;
+  font-family: var(--mono); background: rgba(4,8,13,.82);
+}
+.simbadge.hi  { color: #86efac; box-shadow: inset 0 0 0 1px rgba(34,197,94,.5); }
+.simbadge.mid { color: #fde047; box-shadow: inset 0 0 0 1px rgba(234,179,8,.45); }
+.simbadge.lo  { color: #94a3b8; box-shadow: inset 0 0 0 1px rgba(148,163,184,.3); }
+.objcard .kindtag {
+  position: absolute; left: 4px; top: 4px; padding: 1px 5px;
+  border-radius: 7px; font-size: 9px; font-weight: 700;
+  background: rgba(168,85,247,.28); color: #e9d5ff;
+}
+.objcard .attrdots {
+  position: absolute; left: 5px; bottom: 44px; display: flex; gap: 3px;
+}
+.objcard .attrdots i {
+  width: 8px; height: 8px; border-radius: 50%;
+  outline: 1px solid rgba(0,0,0,.5);
+}
+.objactions {
+  position: absolute; inset: auto 0 0 0; display: flex; gap: 3px; padding: 4px;
+  background: linear-gradient(0deg, rgba(4,8,13,.94), transparent);
+  opacity: 0; transition: opacity .12s;
+}
+.objcard:hover .objactions { opacity: 1; }
+.objactions .btn { flex: 1; padding: 3px 0; font-size: 10px; }
+
+/* ==========================================================================
+   Object Page (#/objects) — wireframe 2026-08
+   ========================================================================== */
+
+.op-player   { flex: 1 1 auto; min-height: 200px; }
+.op-tlpanel  { flex: 0 0 auto; }
+.op-infopanel { flex: 0 0 auto; max-height: 240px; overflow: auto; }
+.op-objpanel { flex: 1 1 56%; min-height: 140px; }
+.op-searchpanel { flex: 1 1 44%; min-height: 190px; }
+
+/* oynatılan izleme aralığının rozeti — videonun sağ üstünde */
+.segtag {
+  position: absolute; right: 10px; top: 10px; z-index: 3;
+  padding: 3px 9px; border-radius: 4px;
+  font-family: var(--mono); font-size: 11px; font-weight: 700;
+  color: #04121b; box-shadow: 0 2px 10px rgba(0,0,0,.5);
+}
+
+/* sabitlenmiş kart — kenarlık rengi satır içinde, buradaki yalnızca bayrak */
+.objcard .pinflag {
+  position: absolute; right: 4px; top: 4px;
+  width: 9px; height: 9px; border-radius: 50%;
+  outline: 1px solid rgba(0,0,0,.55);
+}
+
+/* --- Info ----------------------------------------------------------------
+   Kapalı hâl tek şerit (~64px); ayrıntı tablosu başlıktaki okla açılıyor.
+   Panelin tamamı sürekli açıkken video kuyusu ezilecek kadar daralıyordu. */
+.op-inforow {
+  display: flex; gap: 10px; padding: 8px 11px; align-items: center;
+}
+.op-infoim {
+  width: 34px; aspect-ratio: 1/1.7; object-fit: contain; flex: 0 0 auto;
+  border-radius: 4px; background: var(--bg-inset);
+}
+.op-infomain { flex: 1; min-width: 0; display: flex; flex-direction: column;
+               gap: 6px; }
+.op-infoline { font-family: var(--mono); font-size: 11.5px; color: var(--tx-1);
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.op-swrow { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.op-infopar {
+  padding: 0 11px 8px 55px; font-size: 11px; color: var(--tx-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.op-infomore { padding: 2px 11px 10px; border-top: 1px solid var(--line-soft); }
+.op-infomore .kv { grid-template-columns: 92px 1fr; font-size: 11px;
+                   gap: 4px 10px; margin-top: 8px; }
+.op-more { flex: 0 0 auto; }
+
+/* --- arama paneli -------------------------------------------------------- */
+.op-sbody {
+  padding: 11px; display: flex; flex-direction: column; gap: 14px;
+}
+.op-arow  { display: flex; flex-direction: column; gap: 5px; }
+.op-alabel {
+  font-size: 10px; font-weight: 700; letter-spacing: .4px;
+  text-transform: uppercase; color: var(--tx-2);
+}
+.op-avals {
+  display: flex; flex-wrap: wrap; gap: 6px; row-gap: 7px; align-items: center;
+}
+
+/* Wireframe kuralı: seçili ikon TAM opak, seçilmeyenler soluk. Renk
+   kodlaması cinsiyet ikonlarında satır içi `color` ile geliyor. */
+.op-ico {
+  width: 40px; height: 36px; border-radius: var(--r-sm); font-size: 21px;
+  line-height: 1; display: grid; place-items: center;
+  opacity: .3; filter: grayscale(1); transition: all .12s;
+  background: var(--bg-2); box-shadow: inset 0 0 0 1px var(--line);
+}
+.op-ico:hover { opacity: .65; filter: grayscale(.4); }
+.op-ico.on {
+  opacity: 1; filter: none; background: var(--ac-soft);
+  box-shadow: inset 0 0 0 1px var(--ac-line);
+}
+
+.op-sw {
+  width: 22px; height: 22px; border-radius: 50%; opacity: .42;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.22); transition: all .12s;
+}
+.op-sw:hover { opacity: .8; }
+.op-sw.on {
+  opacity: 1; transform: scale(1.12);
+  box-shadow: 0 0 0 2px var(--bg-1), 0 0 0 3.5px var(--ac);
+}
+.op-sw.none {
+  background: transparent; color: var(--tx-3); font-size: 11px;
+  display: grid; place-items: center;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.op-sw.none.on { color: var(--ac); transform: none; }
+
+.op-sfoot {
+  flex: 0 0 auto; padding: 9px 11px;
+  border-top: 1px solid var(--line-soft); background: var(--bg-1);
+}
+
+/* Re-ID paneli */
+.reidhead {
+  display: flex; gap: 10px; padding: 11px; align-items: flex-start;
+  border-bottom: 1px solid var(--line-soft); background: var(--bg-2);
+}
+.reidhead img {
+  width: 62px; aspect-ratio: 1/1.7; object-fit: cover;
+  border-radius: var(--r-sm); box-shadow: 0 0 0 2px var(--ac);
+}
+.progline { height: 4px; background: var(--bg-3); border-radius: 2px;
+            overflow: hidden; }
+.progline i { display: block; height: 100%; background: var(--ac);
+              transition: width .3s; }
+/* Gerçek backend ilerleme yüzdesi vermiyor — yüzde uydurmak yerine
+   belirsiz (indeterminate) çubuk: "çalışıyor" der, oran iddia etmez. */
+.progline i.indet { width: 35% !important; transition: none;
+                    animation: indet 1.1s ease-in-out infinite; }
+@keyframes indet { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+
+.simrow {
+  display: flex; gap: 9px; padding: 8px 11px; align-items: center;
+  border-bottom: 1px solid var(--line-soft);
+}
+.simrow:hover { background: var(--bg-2); }
+.simrow img {
+  width: 40px; aspect-ratio: 1/1.7; object-fit: cover;
+  border-radius: 3px; background: var(--bg-inset); cursor: pointer;
+}
+.simbar { height: 5px; background: var(--bg-3); border-radius: 3px;
+          overflow: hidden; margin-top: 4px; }
+.simbar i { display: block; height: 100%; }
+
+/* ==========================================================================
+   Tablo
+   ========================================================================== */
+
+table.tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.tbl th {
+  text-align: left; padding: 8px 11px; color: var(--tx-2);
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .4px; border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; background: var(--bg-1); z-index: 2;
+}
+table.tbl td { padding: 8px 11px; border-bottom: 1px solid var(--line-soft);
+               color: var(--tx-1); }
+table.tbl tr:hover td { background: var(--bg-2); }
+
+/* log satırları */
+.logline {
+  display: flex; gap: 9px; padding: 4px 11px; font-family: var(--mono);
+  font-size: 11.5px; border-bottom: 1px solid rgba(255,255,255,.025);
+}
+.logline .lv { font-weight: 800; width: 46px; flex: 0 0 46px; }
+.lv.INFO { color: var(--tx-2); }
+.lv.WARN { color: var(--warn); }
+.lv.ERROR { color: var(--crit); }
+.logline .cp { color: var(--ac-dim); width: 72px; flex: 0 0 72px; }
+.logline .ts { color: var(--tx-3); width: 66px; flex: 0 0 66px; }
+
+/* ==========================================================================
+   Gauge / metre
+   ========================================================================== */
+
+.gauge { display: flex; flex-direction: column; gap: 5px; }
+.gauge .gtop { display: flex; justify-content: space-between;
+               font-size: 11px; color: var(--tx-2); }
+.gauge .gtop b { color: var(--tx-0); font-family: var(--mono); font-size: 12px; }
+.gbar { height: 7px; background: var(--bg-inset); border-radius: 4px;
+        overflow: hidden; box-shadow: inset 0 0 0 1px var(--line-soft); }
+.gbar i { display: block; height: 100%; border-radius: 4px;
+          transition: width .5s ease; }
+
+/* ==========================================================================
+   Modal / toast
+   ========================================================================== */
+
+.backdrop {
+  position: fixed; inset: 0; background: rgba(3,6,10,.72);
+  backdrop-filter: blur(3px); z-index: 90;
+  display: grid; place-items: center; padding: 24px;
+}
+.modal {
+  background: var(--bg-1); border: 1px solid var(--line);
+  border-radius: var(--r-lg); box-shadow: var(--shadow);
+  width: min(720px, 96vw); max-height: 88vh; display: flex;
+  flex-direction: column; overflow: hidden;
+}
+.modal-h { padding: 13px 16px; border-bottom: 1px solid var(--line);
+           display: flex; align-items: center; gap: 10px; font-weight: 700; }
+.modal-b { padding: 16px; overflow: auto; }
+.modal-f { padding: 11px 16px; border-top: 1px solid var(--line);
+           display: flex; justify-content: flex-end; gap: 8px; }
+
+#toasts {
+  position: fixed; right: 14px; bottom: 14px; z-index: 120;
+  display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
+}
+.toast {
+  background: var(--bg-2); border: 1px solid var(--line);
+  border-radius: var(--r); padding: 9px 13px; font-size: 12px;
+  box-shadow: var(--shadow); max-width: 380px;
+  animation: slidein .18s ease; display: flex; gap: 9px; align-items: center;
+}
+.toast.ok   { border-left: 3px solid var(--ok); }
+.toast.warn { border-left: 3px solid var(--warn); }
+.toast.err  { border-left: 3px solid var(--crit); }
+@keyframes slidein { from { opacity: 0; transform: translateX(14px); } }
+
+/* ==========================================================================
+   Login
+   ========================================================================== */
+
+.loginpage {
+  height: 100vh; display: grid; place-items: center;
+  position: relative; overflow: hidden;
+  background:
+    radial-gradient(1100px 560px at 50% -12%, #16263a 0%, transparent 62%),
+    var(--bg-0);
+}
+/* fx/fibers.js buraya bir canvas yerlestiriyor. Degrade ARKA PLANDA KALIYOR:
+   WebGL2 yoksa ya da baglam kaybedilirse ekran bos kalmasin. */
+.fxcanvas {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  display: block; z-index: 0; pointer-events: none;
+}
+.logincard {
+  position: relative; z-index: 1;
+  width: 372px; border-radius: var(--r-lg); padding: 30px;
+  /* Yari saydam + bulaniklik: canvas kartin ardinda seziliyor ama metnin
+     kontrasti bozulmuyor. backdrop-filter desteklenmezse zemin yine opak
+     kaliyor, cunku renk tam saydam degil. */
+  background: color-mix(in srgb, var(--bg-1) 82%, transparent);
+  backdrop-filter: blur(14px) saturate(1.1);
+  border: 1px solid color-mix(in srgb, var(--line) 70%, #7fb6d8);
+  box-shadow: var(--shadow), 0 0 0 1px rgba(255, 255, 255, .03) inset;
+}
+.logincard h1 { font-size: 18px; margin: 14px 0 3px; }
+.logincard p.sub { color: var(--tx-2); font-size: 12px; margin: 0 0 22px; }
+.field { margin-bottom: 12px; }
+.field label { display: block; font-size: 11px; color: var(--tx-2);
+               margin-bottom: 4px; font-weight: 600; }
+
+/* ==========================================================================
+   Yardımcılar
+   ========================================================================== */
+
+.kv { display: grid; grid-template-columns: 132px 1fr; gap: 6px 12px;
+      font-size: 12px; }
+.kv dt { color: var(--tx-2); }
+.kv dd { margin: 0; color: var(--tx-0); font-family: var(--mono);
+         font-size: 11.5px; }
+
+.empty { padding: 34px 20px; text-align: center; color: var(--tx-3);
+         font-size: 12px; }
+.empty .big { font-size: 28px; opacity: .3; display: block; margin-bottom: 8px; }
+
+.divider { height: 1px; background: var(--line-soft); margin: 10px 0; }
+
+.spinner {
+  width: 13px; height: 13px; border: 2px solid var(--line);
+  border-top-color: var(--ac); border-radius: 50%;
+  animation: spin .7s linear infinite; display: inline-block;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.codeblock {
+  background: var(--bg-inset); border: 1px solid var(--line);
+  border-radius: var(--r-sm); padding: 10px 12px; font-family: var(--mono);
+  font-size: 11px; color: var(--tx-1); overflow-x: auto; white-space: pre;
+}
+
+.hlist { display: flex; gap: 6px; overflow-x: auto; padding: 8px 11px; }
+.hlist::-webkit-scrollbar { height: 6px; }
+
+/* seçili takip üyeleri */
+.tlmember {
+  display: flex; gap: 8px; padding: 7px 11px; align-items: center;
+  border-bottom: 1px solid var(--line-soft);
+}
+.tlmember img { width: 32px; aspect-ratio: 1/1.7; object-fit: cover;
+                border-radius: 3px; }
+
+/* API sözleşme görüntüleyici */
+.apirow {
+  display: grid; grid-template-columns: 300px 1fr; gap: 12px;
+  padding: 7px 12px; border-bottom: 1px solid var(--line-soft);
+  font-size: 12px; align-items: baseline;
+}
+.apirow code { font-family: var(--mono); font-size: 11.5px; color: #7dd3fc; }
+.apirow .m { font-weight: 800; }
+.m-GET { color: #86efac; } .m-POST { color: #fde047; }
+.m-PUT { color: #93c5fd; } .m-DELETE { color: #fca5a5; }
+
+/* ---------------------------------------------------- Upload & Analysis -- */
+
+.updrop { border: 1.5px dashed var(--line); border-radius: 8px;
+          padding: 20px; text-align: center; cursor: pointer;
+          display: grid; gap: 4px; place-items: center;
+          color: var(--tx-2); transition: border-color .15s, background .15s; }
+.updrop:hover, .updrop.over { border-color: var(--ac);
+                              background: rgba(56,189,248,.06); }
+
+.uptl { border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+        background: var(--bg-2); }
+.uptime { display: flex; font-size: 11px; color: var(--tx-2);
+          margin-bottom: 6px; font-family: var(--mono, monospace); }
+
+/* Zaman çizgisi: parçalar mutlak konumlu, çakışma üstte kırmızı bant */
+/* Duvar saati cetveli — parça çubuklarının ÜSTÜNDE, ince tırnaklarla */
+.uprule { position: relative; height: 15px; margin-bottom: 2px; }
+.uptick { position: absolute; top: 0; height: 100%; border-left: 1px solid var(--line);
+          transform: translateX(-0.5px); }
+.uptick span { position: absolute; left: 3px; top: 0; font-size: 10px;
+               color: var(--tx-3); white-space: nowrap;
+               font-family: var(--mono, monospace); }
+
+/* zaman çizgisinin altındaki açıklama satırı (renk örneği + sayaçlar) */
+.uprule-lbl { display: flex; align-items: center; gap: 5px; font-size: 10px;
+              color: var(--tx-3); margin-top: 5px; }
+
+.uptrack { position: relative; height: 38px; border-radius: 5px;
+           background: var(--bg-3); overflow: hidden;
+           touch-action: none; }        /* sürüklerken sayfa kaymasın */
+.uptrack.over { box-shadow: inset 0 0 0 2px var(--acc); }
+.upbar { position: absolute; top: 4px; height: 30px; border-radius: 4px;
+         background: #16a34a; color: #f0fdf4; font-size: 11px;
+         display: grid; place-items: center; cursor: grab;
+         box-shadow: inset 0 0 0 1px rgba(0,0,0,.25); overflow: hidden; }
+.upbar.on { background: #22c55e; box-shadow: inset 0 0 0 2px #bbf7d0; }
+/* süresi henüz bilinmeyen parça (AVI / yüklenmemiş) — taralı ve soluk,
+   yine de sürüklenebilir; uzunluğu tahmini olduğu için kesikli çerçeve */
+.upbar.est { background: repeating-linear-gradient(45deg,
+               #3f6212 0 6px, #4d7c0f 6px 12px);
+             color: #ecfccb; opacity: .8;
+             box-shadow: inset 0 0 0 1px rgba(0,0,0,.25); }
+.upbar.est.on { opacity: 1; box-shadow: inset 0 0 0 2px #d9f99d; }
+/* sürükleme sırasında: imleç, üste al, kenarlık */
+.upbar.drag { cursor: grabbing; z-index: 5; opacity: .92;
+              box-shadow: inset 0 0 0 2px #fff, 0 4px 12px rgba(0,0,0,.4); }
+/* komşunun ucuna yapıştığında yanıp sönen ipucu */
+.upbar.snap { box-shadow: inset 0 0 0 2px #38bdf8, 0 4px 12px rgba(0,0,0,.4); }
+/* sürüklerken alttaki bilgi satırı canlı saati gösterir */
+.updrag-info { color: var(--acc); font-family: var(--mono, monospace); }
+/* Çubuk içeriği: solda sıra numarası rozeti, sağda ad + süre.
+   Dar çubukta ad/süre gizlenir, numara kalır — hangi klip olduğu yine belli. */
+.upbar { display: flex; align-items: center; gap: 5px; padding: 0 5px;
+         justify-content: flex-start; }
+.upbar-n { flex: 0 0 auto; min-width: 15px; height: 15px; padding: 0 3px;
+           border-radius: 3px; background: rgba(0,0,0,.35);
+           font-size: 10px; line-height: 15px; text-align: center;
+           font-family: var(--mono, monospace); }
+.upbar-t { flex: 1 1 auto; min-width: 0; display: flex; gap: 5px;
+           align-items: baseline; overflow: hidden; }
+.upbar-t b { font-weight: 600; overflow: hidden; text-overflow: ellipsis;
+             white-space: nowrap; }
+.upbar-t i { font-style: normal; opacity: .75; flex: 0 0 auto;
+             font-family: var(--mono, monospace); font-size: 10px; }
+.upbar span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Çakışan aralık — ikinci kayıtta kırpılacak bölge */
+.upover { position: absolute; top: 0; height: 38px; background: #ef4444;
+          opacity: .85; pointer-events: none; }
+.upgap { position: absolute; top: 4px; height: 30px;
+         background: repeating-linear-gradient(45deg,
+           transparent 0 5px, rgba(255,255,255,.05) 5px 10px);
+         border: 1px dashed var(--line); border-radius: 4px;
+         display: grid; place-items: center;
+         font-size: 10px; color: var(--tx-2); }
+
+/* Zaman çizgisinde VLM'in gerçekten göreceği aralık.
+   Çubuğun üzerine bindirilir: parlak = analiz edilecek, gerisi atlanacak. */
+.upseen { position: absolute; top: 4px; height: 30px; z-index: 2;
+          pointer-events: none; border-radius: 2px;
+          background: rgba(34,197,94,.30);
+          box-shadow: inset 0 0 0 1px rgba(134,239,172,.85),
+                      0 0 8px rgba(34,197,94,.45); }
+/* açıklama satırındaki küçük renk örneği */
+.upseen-key { display: inline-block; width: 16px; height: 8px;
+              border-radius: 2px; vertical-align: middle;
+              background: rgba(34,197,94,.30);
+              box-shadow: inset 0 0 0 1px rgba(134,239,172,.85); }
+
+/* Hover kare önizlemesi */
+.upthumb { position: fixed; z-index: 9999; pointer-events: none;
+           transform: translate(-50%, calc(-100% - 10px));
+           background: var(--bg-1); border: 1px solid var(--line);
+           border-radius: 6px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,.5); }
+.upthumb img { display: block; width: 160px; border-radius: 3px; }
+.upthumb .t { font-size: 10px; color: var(--tx-2); margin-top: 3px;
+              text-align: center; font-family: var(--mono, monospace);
+              max-width: 160px; }
+
+.uprow { display: flex; align-items: center; gap: 8px; padding: 5px 8px;
+         border: 1px solid var(--line); border-radius: 6px;
+         background: var(--bg-2); cursor: pointer; }
+.uprow.on { border-color: var(--ac); background: rgba(56,189,248,.07); }
+
+@media (max-width: 1400px) {
+  :root { --sidebar-w: 240px; --events-w: 300px; }
+}
+
+/* ==========================================================================
+   Library — katalog yönetimi (#/manage)
+   ========================================================================== */
+
+
+
+
+.mg-scroll { overflow-x: auto; }
+table.mg {
+  width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 720px;
+}
+table.mg th {
+  text-align: left; padding: 7px 11px; white-space: nowrap;
+  font-size: 10px; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--tx-2); font-weight: 700;
+  border-bottom: 1px solid var(--line); background: var(--bg-2);
+  position: sticky; top: 0; z-index: 1;
+}
+table.mg td {
+  padding: 7px 11px; border-bottom: 1px solid var(--line-soft);
+  vertical-align: middle;
+}
+table.mg tbody tr:hover { background: var(--bg-2); }
+table.mg tbody tr.on { background: var(--ac-soft); }
+table.mg td.mono { font-family: var(--mono); color: var(--tx-2); }
+table.mg td.num  { font-family: var(--mono); text-align: right; white-space: nowrap; }
+table.mg td.act  { text-align: right; white-space: nowrap; }
+table.mg td.act .btn { margin-left: 4px; }
+table.mg .warnq { color: #fbbf24; }
+
+/* Yıkıcı işlem düğmesi: kırmızıya ancak imleç üstündeyken dönüyor —
+   listede sürekli kırmızı bir sıra korkutucu ve okunmaz oluyordu. */
+.btn.danger { color: var(--tx-2); }
+.btn.danger:hover {
+  color: #fca5a5; background: rgba(239, 68, 68, .12);
+  box-shadow: inset 0 0 0 1px rgba(239, 68, 68, .38);
+}
+
+.mg-pill {
+  display: inline-block; padding: 1px 8px; border-radius: 9px;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .02em;
+  background: var(--bg-3); color: var(--tx-2);
+}
+.mg-pill.ok   { background: rgba(34,197,94,.16);  color: #86efac; }
+.mg-pill.run  { background: rgba(56,189,248,.16); color: #7dd3fc; }
+.mg-pill.err  { background: rgba(239,68,68,.16);  color: #fca5a5; }
+.mg-pill.idle { background: var(--bg-3);          color: var(--tx-2); }
+
+/* Manage: üç panel dikey — kuyruk en altta, kalan alanı paylaşırlar */
+.mg-groups { flex: 0 0 auto; max-height: 30%; }
+.mg-videos { flex: 1 1 auto; min-height: 160px; }
+.mg-queue  { flex: 0 0 auto; max-height: 34%; min-height: 120px; }
+
+/* Object Page: timeline paneli artık videodaki BÜTÜN nesneleri gösteriyor,
+   yani birden çok satır. Yükseklik canvas'tan geliyor (Timeline.height()),
+   panel de ona uyuyor — kırpmasın diye overflow serbest. */
+.op-tlbody { padding: 6px; overflow: visible; }
+
