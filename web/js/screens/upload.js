@@ -11,8 +11,9 @@
         dosya seç → yükle → süre gelir → başlangıç saatlerini ayarla → analiz
 
    Çakışma (overlap): iki kayıt aynı zaman aralığını kapsıyorsa o aralık
-   kırmızı gösterilir ve ikinci kayıtta kırpılmış sayılır — aynı görüntü iki
-   kez analiz edilmesin diye.
+   kırmızı gösterilir ve o anın sahibi SONRA BAŞLAYAN kliptir — alttaki klip
+   ikiye bölünüp araya girer, sonra kaldığı yerden devam eder. Kırpmayı
+   tercih eden "✂ Trim overlaps" düğmesine basar.
    ========================================================================== */
 
 import {
@@ -75,7 +76,7 @@ async function refreshGroups() {
   try {
     api.invalidate();
     const g = await api.groups();
-    store.set({ groups: g.groups, eventTypes: g.event_types });
+    store.set({ groups: g.groups });
     return g.groups;
   } catch (e) {
     toast('Could not refresh the group list: ' + e.message, 'warn');
@@ -109,76 +110,99 @@ const UP = {
      tek video olarak gider. Kapalıyken her parça ayrı video_id alır. */
   merge: true,
   mergedId: null, // birleştirme sonrası oluşan video_id
-  /* VLM örnekleme penceresi. Backend her `interval` saniyede bir `window`
-     saniyelik pencere açıyor (metadata: vlm_segment_interval_seconds /
-     vlm_segment_duration_seconds). Kullanıcı önemli anları bu pencerelere
-     denk getirmek istiyor, o yüzden değerler arayüzde düzenlenebilir. */
-  vlmInterval: +(localStorage.getItem('up.vlmInterval') || 60),
-  vlmWindow: +(localStorage.getItem('up.vlmWindow') || 10),
 };
 
 /**
- * Birleşik videodaki yerleşim. Boşluklar concat'te DÜŞER: kümülatif konum
- * yalnızca parça sürelerinin toplamıdır, duvar saatindeki aralıklar değil.
+ * Birleşik videodaki yerleşim — duvar saati şeridini doğrusal bir MP4'e
+ * çeviren yer.
  *
- * @returns {{rows:Array, total:number}} rows: {item, at, dur, end}
+ * MODEL: SONRAKİ KLİP ARAYA GİRER
+ * -------------------------------
+ * Şerit bir duvar saati ekseni; tek bir MP4 ise doğrusal, aynı anda iki
+ * görüntü oynatamaz. O yüzden bir an birden çok klip tarafından kapsanıyorsa
+ * EN GEÇ BAŞLAYAN klip o anın sahibi olur, bitince alttaki kaldığı yerden
+ * devam eder:
+ *
+ *     1. klip   T ──────────────────────────────── T+60
+ *     2. klip              T+30 ──── T+40
+ *     birleşik  [1: 0–30][2: 0–10][1: 30–60]        → 60 sn
+ *
+ * Böylece birleşik süre, şeritte görünen kapsanmış duvar saati kadar olur ve
+ * kullanıcının "ikinci videoyu 30. saniyeye koydum" beklentisi karşılanır.
+ *
+ * Eskiden bunun yerine sonraki klibin BAŞI kırpılıyordu. Kısmi çakışmada
+ * makuldü, tam kapsamada yıkıcıydı: yukarıdaki örnekte 2. klipten kesilecek
+ * miktar min(30, 10) = 10 sn, yani klibin tamamı. Geriye 200 ms'lik bir
+ * kırıntı kalıyor, kullanıcı eklediği videoyu birleşikte bulamıyordu.
+ *
+ * Boşluklar DÜŞER: 09:00'da biten klipten sonra 09:05'te başlayan klip
+ * birleşikte hemen ardından gelir (kullanıcı gönderim öncesi uyarılıyor).
+ *
+ * @returns {{segments:Array, files:Array, total:number, splits:number}}
+ *   segments: {item, srcIn, srcOut, at, dur} — ffmpeg'e gidecek SIRA
+ *   files:    benzersiz item'lar, ilk görünme sırasında (yükleme sırası)
+ *   splits:   araya girme yüzünden bölünen parça sayısı
  */
 function mergedLayout(items) {
-  /* SIRA: zaman çizgisindeki başlangıç saatine göre — `UP.items` dizisinin
-     kendi sırası değil. Kullanıcı çubukları sürükleyip yer değiştirdiğinde
-     dizi sırası olduğu gibi kalıyor; buna güvenince alt şerit sürüklemeyi
-     hiç görmüyordu. */
+  /* SIRA duvar saatine göre — `UP.items` dizisinin kendi sırası değil.
+     Kullanıcı çubukları sürükleyip yer değiştirdiğinde dizi sırası olduğu
+     gibi kalıyor; ona güvenince alt şerit sürüklemeyi hiç görmüyordu. */
   const idx = new Map(items.map((it, i) => [it, i]));
-  const list = items.filter((i) => i.startAt).sort((a, b) =>
-    a.startAt - b.startAt || idx.get(a) - idx.get(b));
+  const clips = items.filter((i) => i.startAt).map((it) => ({
+    item: it,
+    ws: it.startAt.getTime(),                 // duvar saatinde başlangıç
+    we: it.startAt.getTime() + effDur(it),    // duvar saatinde bitiş
+    off: it.trimIn || 0,                      // kaynaktaki başlangıç
+    ord: idx.get(it),
+  })).sort((a, b) => a.ws - b.ws || a.ord - b.ord);
 
-  const rows = [];
-  let t = 0;          // birleşik videodaki konum
-  let wallEnd = null; // bir öncekinin duvar saatindeki bitişi
-  for (const it of list) {
-    const full = it.durationMs || EST_DUR_MS;
-    const outMs = it.trimOut == null ? full : it.trimOut;
-    const wallStart = it.startAt.getTime();
+  if (!clips.length) return { segments: [], files: [], total: 0, splits: 0 };
 
-    /* ÇAKIŞMA: iki parça aynı zaman aralığını kapsıyorsa sonrakinin başı o
-       kadar atılır — üstteki rayın kırmızı bantla söylediği şey bu. Eskiden
-       burada hesaba katılmıyordu ve birleşik uzunluk çakışan görüntüyü iki
-       kez sayıyordu. Kalıcı yazmıyoruz (kullanıcının trim'i bozulmasın),
-       yalnızca bu yerleşim için hesaplıyoruz. */
-    let inMs = it.trimIn || 0;
-    let overlapCut = 0;
-    if (wallEnd != null && wallStart < wallEnd) {
-      overlapCut = Math.min(wallEnd - wallStart, Math.max(0, outMs - inMs - 200));
-      inMs += overlapCut;
+  /* Bütün başlangıç/bitişler kesme noktası. Aradaki her dilimde sahibi
+     bulup dilimleri birleştiriyoruz. */
+  const cuts = [...new Set(clips.flatMap((c) => [c.ws, c.we]))]
+    .sort((a, b) => a - b);
+
+  const segments = [];
+  let t = 0;                                  // birleşik videodaki konum
+  for (let i = 0; i < cuts.length - 1; i++) {
+    const a = cuts[i], b = cuts[i + 1];
+    if (b - a < 40) continue;                 // 40 ms altı dilim: gürültü
+
+    // Bu aralığı kapsayanlar arasında EN GEÇ başlayan kazanır.
+    let owner = null;
+    for (const c of clips) {
+      if (c.ws <= a && c.we >= b && (!owner || c.ws > owner.ws
+        || (c.ws === owner.ws && c.ord > owner.ord))) owner = c;
     }
+    if (!owner) continue;                     // boşluk — birleşikte yok
 
-    const dur = Math.max(200, outMs - inMs);
-    rows.push({ item: it, at: t, dur, end: t + dur, inMs, outMs, overlapCut });
-    t += dur;
-    wallEnd = Math.max(wallEnd == null ? -Infinity : wallEnd,
-                       wallStart + effDur(it));
-  }
-  return { rows, total: t };
-}
+    const srcIn = owner.off + (a - owner.ws);
+    const srcOut = owner.off + (b - owner.ws);
 
-/** k. örnekleme penceresi [başlangıç, bitiş] — birleşik video saniyesinde. */
-function vlmWindows(totalMs, intervalSec, windowSec) {
-  const out = [];
-  const iv = Math.max(1, intervalSec) * 1000;
-  const w = Math.max(1, windowSec) * 1000;
-  for (let t = 0; t < Math.max(totalMs, 1); t += iv) {
-    out.push({ t0: t, t1: Math.min(t + w, t + iv) });
+    /* Aynı klibin ardışık iki dilimi kaynakta da bitişikse tek segment
+       kalsın: gereksiz kesim ffmpeg'de fazladan anahtar kare demek. */
+    const last = segments[segments.length - 1];
+    if (last && last.item === owner.item && Math.abs(last.srcOut - srcIn) < 5) {
+      last.srcOut = srcOut;
+      last.dur = last.srcOut - last.srcIn;
+      t = last.at + last.dur;
+      continue;
+    }
+    segments.push({ item: owner.item, srcIn, srcOut, at: t, dur: srcOut - srcIn });
+    t += srcOut - srcIn;
   }
-  return out;
-}
 
-/** Bir parçanın ne kadarı örnekleme penceresine düşüyor (ms). */
-function coveredMs(row, wins) {
-  let n = 0;
-  for (const w of wins) {
-    n += Math.max(0, Math.min(row.end, w.t1) - Math.max(row.at, w.t0));
-  }
-  return n;
+  // Yükleme sırası: her dosya BİR KEZ, ilk göründüğü yere göre.
+  const files = [];
+  for (const s of segments) if (!files.includes(s.item)) files.push(s.item);
+
+  // Kaç parça bölündü — kullanıcıya "araya girdi" demek için.
+  const used = new Map();
+  for (const s of segments) used.set(s.item, (used.get(s.item) || 0) + 1);
+  const splits = [...used.values()].filter((n) => n > 1).length;
+
+  return { segments, files, total: t, splits };
 }
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -356,17 +380,9 @@ export async function screenUpload() {
   const sideBox = el('div', { style: { display: 'grid', gap: '12px' } });
   const mergeNote = el('div', { class: 'tiny', style: { flex: 1, lineHeight: 1.6 } });
 
-  /**
-   * Birleştirmenin analiz üzerindeki bedelini açıkça yazar.
-   *
-   * Backend VLM'i sabit aralıkla örnekliyor (vlm_segment_interval_seconds 60,
-   * duration 10). Kısa klipler AYRI kalırsa her birine bir pencere düşer ve
-   * neredeyse tamamı analiz edilir; tek dosyada birleşince aynı 60 sn'lik
-   * aralık tüm kaydı kapsar ve yalnızca ilk 10 saniye görülür.
-   */
+  /** Birleştirme kipinin ne ürettiğini tek cümleyle yazar. */
   function drawMergeNote() {
     const parts = UP.items.length || 0;
-    const totalMs = UP.items.reduce((a, i) => a + (i.durationMs || 0), 0);
     if (!UP.merge) {
       mergeNote.style.color = 'var(--tx-2)';
       mergeNote.textContent = parts
@@ -375,17 +391,11 @@ export async function screenUpload() {
       return;
     }
     mergeNote.style.color = '#fbbf24';
-    const secs = totalMs / 1000;
     mount(mergeNote,
       el('div', {}, parts
         ? `${parts} file(s) will be merged into one MP4 by ffmpeg and `
           + 'registered as a single video_id.'
-        : 'Files are merged into one MP4 and registered as a single video_id.'),
-      secs > 10 ? el('div', {},
-        'Coverage warning: the VLM looks at only 10s out of every 60s. '
-        + `Merged, roughly `
-        + `${Math.max(1, Math.round(secs / 60)) * 10}s of ${hms(secs)} `
-        + 'would be analyzed — kept separate, nearly all of each file is.') : null);
+        : 'Files are merged into one MP4 and registered as a single video_id.'));
   }
 
   /* ---- yeniden çizim ---------------------------------------------------- */
@@ -398,7 +408,7 @@ export async function screenUpload() {
       L.gapMs ? el('span', { style: { color: 'var(--tx-2)' } },
         ` · gaps ${hms(L.gapMs / 1000)}`) : null,
       L.overlapMs ? el('span', { style: { color: '#f87171' } },
-        ` · overlap ${hms(L.overlapMs / 1000)} (trimmed from the later clip)`) : null,
+        ` · overlap ${hms(L.overlapMs / 1000)} (the later clip plays here)`) : null,
       L.estCount ? el('span', { style: { color: '#fbbf24' } },
         ` · ${L.estCount} clip(s) with estimated length`) : null,
       (() => {
@@ -514,43 +524,12 @@ export async function screenUpload() {
       track.append(el('div.upover', {
         style: { left: pctOf(o.t0) + '%',
                  width: Math.max(0.6, pctOf(o.t1) - pctOf(o.t0)) + '%' },
-        title: `Overlap ${hms((o.t1 - o.t0) / 1000)} — trimmed from ${o.b.name}`,
+        title: `Overlap ${hms((o.t1 - o.t0) / 1000)} — ${o.b.name} plays here, `
+             + 'the clip underneath resumes afterwards',
       }));
     }
 
-    /* --- VLM pencereleri, DOĞRUDAN çubukların üzerinde --------------------
-       Ayrı bir şerit yerine burada gösteriyoruz: parlak yeşil boyanan her
-       aralık gerçekten analiz edilecek görüntü, gerisine hiç bakılmayacak.
-       Kullanıcı klipleri sürükleyip kırparken önemli anı bu bantların altına
-       getirmeye çalışıyor — bakması gereken tek yer burası.
-
-       Eşleme duvar saatinden DEĞİL birleşik konumdan yapılıyor: boşluklar
-       concat'te düştüğü için bir klibin birleşik videodaki yeri duvar
-       saatiyle aynı olmak zorunda değil. `mergedLayout` her klip için
-       birleşik başlangıcı (`at`) ve çakışmadan atılan başı (`overlapCut`)
-       veriyor; aradaki dönüşüm doğrusal. */
     const ML = mergedLayout(UP.items);
-    const rowOf = new Map(ML.rows.map((r) => [r.item, r]));
-    const wins = vlmWindows(ML.total, UP.vlmInterval, UP.vlmWindow);
-    let seenMs = 0;
-    for (const p of L.parts) {
-      const r = rowOf.get(p.item);
-      if (!r) continue;
-      // birleşik konum m → duvar saati t
-      const toWall = (m) => p.t0 + r.overlapCut + (m - r.at);
-      for (const w of wins) {
-        const a = Math.max(r.at, w.t0);
-        const b = Math.min(r.end, w.t1);
-        if (b - a <= 0) continue;
-        seenMs += b - a;
-        track.append(el('div.upseen', {
-          style: { left: pctOf(toWall(a)) + '%',
-                   width: (pctOf(toWall(b)) - pctOf(toWall(a))) + '%' },
-          title: `Analyzed by the VLM\nmerged ${hms(a / 1000)} – ${hms(b / 1000)}`,
-        }));
-      }
-    }
-    const blind = ML.rows.filter((r) => coveredMs(r, wins) === 0);
 
     /* Zaman çizgisinin kendisi de bırakma alanı — dosyayı doğrudan buraya
        sürükleyip bırakabilmek için. */
@@ -563,7 +542,13 @@ export async function screenUpload() {
       addFiles([...e.dataTransfer.files].filter((f) => f.size > 0));
     });
 
-    /* --- duvar saati cetveli: eşit aralıklı, okunur adımlarla ------------- */
+    /* --- cetvel: GEÇEN SÜRE, duvar saati değil -----------------------------
+       Eksen 00:00'dan başlıyor ve zaman çizgisinin toplam uzunluğuna kadar
+       gidiyor. Duvar saati yazıyordu ama çoğu dosyada kayıt zamanı metaveride
+       yok; o zaman `startAt` "şimdi"ye düşüyor ve ekran bugünün tarihini
+       gösteriyordu — kaydın kendisiyle ilgisi olmayan bir bilgi. Klipleri
+       sıralamak için içeride hâlâ duvar saati kullanılıyor, yalnızca
+       ETİKETLER göreli. */
     const ruler = el('div.uprule');
     const step = niceStep(dSpan);
     const first = Math.ceil(d0 / step) * step;
@@ -571,29 +556,18 @@ export async function screenUpload() {
       const pc = pctOf(t);
       if (pc < 1 || pc > 99) continue;
       ruler.append(el('div.uptick', { style: { left: pc + '%' } },
-        el('span', {}, new Date(t).toLocaleTimeString())));
+        el('span', {}, hms((t - L.t0) / 1000))));
     }
 
     tlBox.append(
       el('div.uptime', {},
-        el('span', {}, new Date(L.t0).toLocaleString()),
+        el('span', {}, hms(0)),
         el('span.grow'),
         el('span', { class: 'muted' },
           `${L.parts.length} clips · ${hms(ML.total / 1000)} merged`),
         el('span.grow'),
-        el('span', {}, new Date(L.t1).toLocaleString())),
-      ruler, track,
-      el('div.uprule-lbl', {},
-        el('span.upseen-key', {}),
-        ` bright = analyzed by the VLM (${UP.vlmWindow}s every `
-        + `${UP.vlmInterval}s of merged video) · everything else is skipped`,
-        el('span.grow'),
-        el('span', { style: { color: seenMs ? 'var(--ok)' : 'var(--tx-3)' } },
-          `${hms(seenMs / 1000)} analyzed`),
-        blind.length ? el('span', {
-          style: { color: '#f87171', marginLeft: '8px', fontWeight: 700 },
-          title: blind.map((r) => r.item.name).join(', '),
-        }, `· ${blind.length} clip(s) never analyzed`) : null));
+        el('span', {}, hms(L.span / 1000))),
+      ruler, track);
 
     drawInfo(L);
   }
@@ -924,7 +898,7 @@ export async function screenUpload() {
        ne diyorsa ffmpeg'e giden de o. Burada ayrıca hesaplamak, iki yerin
        birbirinden ayrı düşmesi demekti (çakışma tam olarak öyle kaçmıştı). */
     const ML = mergedLayout(UP.items);
-    const ordered = ML.rows.map((r) => r.item);
+    const ordered = ML.files;               // her dosya bir kez yüklenir
     const startAt = ordered[0].startAt || null;
 
     /* Boşluklar concat'te düşer: 09:00'da biten parçadan sonra 09:05'te
@@ -959,16 +933,21 @@ export async function screenUpload() {
 
       toast('Merging… (ffmpeg — may take a few minutes for large files)',
         'ok', 8000);
-      /* Kesim noktaları birleşik yerleşimden — `inMs` çakışma kırpmasını da
-         içeriyor, yani üstteki rayda kırmızı görünen aralık gerçekten
-         atılıyor. Index'ler yükleme sırasıyla aynı (ordered = ML.rows). */
-      const trims = ML.rows.map((r, i) => ({
-        index: i,
-        in_ms: Math.round(r.inMs),
-        out_ms: Math.round(r.outMs),
-      })).filter((t, i) => t.in_ms > 0
-        || t.out_ms < Math.round(ML.rows[i].item.durationMs || Infinity));
-      const meta = await api.mergeBuild(mid, trims);
+      /* SEGMENT listesi: ffmpeg'e giden sıra. Bir dosya birden çok kez
+         geçebilir — araya giren klip alttakini ikiye böldüğünde ilk parça
+         iki segment olarak çıkıyor. Yükleme tek, `part` alanı hangi yüklü
+         parçaya bakıldığını söylüyor. */
+      const partOf = new Map(ordered.map((it, i) => [it, i]));
+      const segments = ML.segments.map((s) => ({
+        part: partOf.get(s.item),
+        in_ms: Math.round(s.srcIn),
+        out_ms: Math.round(s.srcOut),
+      }));
+      if (ML.splits) {
+        toast(`${ML.splits} clip split so a later clip could play in the `
+          + 'middle', 'ok', 6000);
+      }
+      const meta = await api.mergeBuild(mid, segments);
       for (const w of meta.warnings || []) toast(w, 'warn', 7000);
 
       if (!UP.groupId) UP.groupId = await ensureGroup(UP.collName);
@@ -1137,35 +1116,6 @@ export async function screenUpload() {
           }, '✂ Trim overlaps'),
           fileInput),
 
-        /* Örnekleme penceresi BACKEND ayarı — buradan değiştirilemiyor,
-           yalnızca zaman çizgisindeki yeşil bantları doğru çizebilmek için
-           biliniyor. Backend değeri değişirse buradan güncellenir. */
-        el('div.row', { style: { gap: '8px', alignItems: 'center' } },
-          el('span', { class: 'tiny muted' },
-            'VLM sampling (backend setting)'),
-          el('input.input', {
-            type: 'number', min: 1, step: 1, value: UP.vlmWindow,
-            style: { width: '62px' },
-            title: 'Window length the VLM looks at (vlm_segment_duration_seconds)',
-            onchange: (e) => {
-              UP.vlmWindow = Math.max(1, +e.target.value || 10);
-              localStorage.setItem('up.vlmWindow', UP.vlmWindow);
-              redraw();
-            },
-          }),
-          el('span', { class: 'tiny muted' }, 's every'),
-          el('input.input', {
-            type: 'number', min: 1, step: 1, value: UP.vlmInterval,
-            style: { width: '62px' },
-            title: 'Sampling interval (vlm_segment_interval_seconds)',
-            onchange: (e) => {
-              UP.vlmInterval = Math.max(1, +e.target.value || 60);
-              localStorage.setItem('up.vlmInterval', UP.vlmInterval);
-              redraw();
-            },
-          }),
-          el('span', { class: 'tiny muted' }, 's')),
-
         /* Birleştirme kipi. Varsayılan AÇIK: kullanıcı Upload ekranında
            parçaları tek bir zaman çizgisine dizdiğinde beklentisi tek bir
            kayıt elde etmek. Kapatılırsa her parça ayrı video_id alır. */
@@ -1240,10 +1190,21 @@ export async function screenUpload() {
       }, 'error') : null))
       : el('div', { class: 'tiny muted' }, 'no analysis jobs yet'));
 
+    /* Boşta 10 sn'de bir sormanın karşılığı yok: kuyruğa iş ancak bu ekrandan
+       giriyor ve o an zaten tazeleniyor. Boşta 60, çalışırken 6. Sekme arka
+       plandaysa istek atlanıyor — açık unutulmuş bir sekme gece boyunca
+       backend'i yokluyordu. */
     const busy = rows.some((j) => j.status === 'running' || j.status === 'queued');
     const note = document.getElementById('qnote');
     if (note) note.textContent = busy ? 'auto-refreshing…' : '';
-    if (qAlive) setTimeout(queueTick, busy ? 3000 : 10000);
+    if (qAlive) {
+      const next = () => {
+        if (!qAlive) return;
+        if (document.hidden) { setTimeout(next, 10000); return; }
+        queueTick();
+      };
+      setTimeout(next, busy ? 6000 : 60000);
+    }
   }
   queueTick();
 

@@ -4,8 +4,8 @@
    Müşteri wireframe'i bire bir:
 
      tek tık   → nesne seçilir, video şeridin BAŞINA atlar ve oynar
-     çift tık  → paletten sıradaki rengi alır
-     Info      → renk paletinden elle seçim
+     çift tık  → paletten sıradaki rengi alır (hızlı yol)
+     köşedeki nokta → renk seçici açılır (elle seçim)
      oynarken  → playhead bir şeridin üstündeyse o nesnenin bbox'ı vurgulanır
      sağ panel → Class / Gender / Color / Age / Accessory ile arama
 
@@ -43,6 +43,7 @@ import {
 import { VideoOverlay } from '../overlay.js';
 import { Timeline } from '../timeline.js';
 import { ROOT, onLeave, topbar, treePanel } from '../ui.js';
+import { parChips, ageIcon, genderIcon } from '../parchip.js';
 
 /* Kullanıcının kişi işaretlemek için kullandığı palet. Izgara kenarlığı,
    timeline şeridi ve video bbox'ı aynı rengi kullansın diye tek kaynak. */
@@ -74,15 +75,18 @@ const CLASSES = [
   { v: 'bicycle', icon: '🚲', label: 'Bicycle' },
 ];
 
+/* Cinsiyet ve yaş satırlarında EMOJİ YOK: 🧒/🧑/🧓 küçük boyutta neredeyse
+   aynı görünüyor ve platforma göre değişiyor. Info rozetlerindeki çizimlerin
+   aynısı kullanılıyor — süzgeçte ve sonuçta aynı simge. */
 const GENDERS = [
-  { key: 'gender', v: 'Male', icon: '🚹', label: 'Male', tint: '#3b82f6' },
-  { key: 'gender', v: 'Female', icon: '🚺', label: 'Female', tint: '#f472b6' },
+  { key: 'gender', v: 'Male', svg: genderIcon('Male'), label: 'Male' },
+  { key: 'gender', v: 'Female', svg: genderIcon('Female'), label: 'Female' },
 ];
 
 const AGES = [
-  { key: 'age', v: 'Child', icon: '🧒', label: 'Child' },
-  { key: 'age', v: 'Adult', icon: '🧑', label: 'Adult' },
-  { key: 'age', v: 'Senior', icon: '🧓', label: 'Senior' },
+  { key: 'age', v: 'Child', svg: ageIcon('Child'), label: 'Child' },
+  { key: 'age', v: 'Adult', svg: ageIcon('Adult'), label: 'Adult' },
+  { key: 'age', v: 'Senior', svg: ageIcon('Senior'), label: 'Senior' },
 ];
 
 const EXTRAS = [
@@ -226,16 +230,21 @@ export async function screenObjects(videoId) {
       paintSel();
     };
 
-    const iconBtn = (item, group, tint) => el('button.op-ico', {
-      title: item.label,
-      'data-group': group,
-      'data-v': item.v,
-      style: tint ? { color: tint } : {},
-      onclick: () => {
-        if (group === 'cls') { sel.cls = item.v; paintSel(); return; }
-        toggle(group, item.v);          // aynısına tekrar basmak kaldırır
-      },
-    }, item.icon);
+    const iconBtn = (item, group, tint) => {
+      const b = el('button.op-ico', {
+        title: item.label,
+        'data-group': group,
+        'data-v': item.v,
+        style: tint ? { color: tint } : {},
+        onclick: () => {
+          if (group === 'cls') { sel.cls = item.v; paintSel(); return; }
+          toggle(group, item.v);        // aynısına tekrar basmak kaldırır
+        },
+      }, item.svg ? null : item.icon);
+      // `svg` alanı yalnızca parchip.js'teki sabit şablonlardan geliyor.
+      if (item.svg) { b.innerHTML = item.svg; b.classList.add('svg'); }
+      return b;
+    };
 
     const iconRow = (label, items, group, tinted) => el('div.op-arow', {},
       el('div.op-alabel', {}, label),
@@ -347,7 +356,16 @@ export async function screenObjects(videoId) {
           class: 'im', src: o.crop, loading: 'lazy',
           onerror: (e) => { e.target.style.visibility = 'hidden'; },
         }),
-        mark ? el('div.pinflag', { style: { background: mark } }) : null,
+        /* Renk atama BURADAN. Info panelinde sürekli duran bir palet
+           istenmiyordu ama özellik gerekli: kullanıcı kırpımlara bakıp
+           "bu adam bu renk" diyor. Nokta her kartta duruyor, palet ancak
+           tıklayınca açılıyor. */
+        el('button.objdot', {
+          class: mark ? 'on' : '',
+          style: mark ? { background: mark, color: mark } : {},
+          title: mark ? `Colour ${mark} — click to change` : 'Assign a colour',
+          onclick: (e) => { e.stopPropagation(); openPalette(e.currentTarget, o); },
+        }),
         el('div', { class: 'cap' },
           /* Kartta aralığın kendisi: "ne zaman" sorusunun cevabı tek bir an
              değil, girip çıktığı pencere. */
@@ -392,6 +410,59 @@ export async function screenObjects(videoId) {
     if (videoEl) videoEl.play().catch(() => {});
   }
 
+  /* ------------------------------------------------------ renk seçici ----
+     Sürekli görünen palet istenmedi: ızgaradaki noktaya basınca açılan
+     küçük bir kutu. Kartın yanına konumlanıyor, dışarı tıklayınca ya da Esc
+     ile kapanıyor. Aynı anda tek kutu açık kalır. */
+  let pop = null;
+
+  function closePalette() {
+    if (!pop) return;
+    pop.remove();
+    pop = null;
+    document.removeEventListener('mousedown', onOutside, true);
+    document.removeEventListener('keydown', onEsc, true);
+  }
+  const onOutside = (e) => { if (pop && !pop.contains(e.target)) closePalette(); };
+  const onEsc = (e) => { if (e.key === 'Escape') closePalette(); };
+  onLeave(closePalette);
+
+  function openPalette(anchorEl, o) {
+    const already = pop && pop.dataset.for === o.id;
+    closePalette();
+    if (already) return;               // aynı noktaya tekrar basmak kapatır
+
+    const cur = marks.get(o.id);
+    pop = el('div.op-pop', { 'data-for': o.id },
+      el('div.op-poph', {}, `#${o.track_id}`),
+      el('div.op-popsw', {},
+        PALETTE.map((c) => el('button.op-sw', {
+          class: cur === c ? 'on' : '',
+          title: c,
+          style: { background: c },
+          onclick: () => { setMark(o, c); closePalette(); },
+        })),
+        el('button.op-sw.none', {
+          class: cur ? '' : 'on', title: 'No colour',
+          onclick: () => { setMark(o, null); closePalette(); },
+        }, '✕')));
+    document.body.append(pop);
+
+    /* Konum: noktanın altına, ekranın dışına taşarsa içeri çekilerek. */
+    const r = anchorEl.getBoundingClientRect();
+    const w = pop.offsetWidth, h = pop.offsetHeight;
+    let left = r.right - w;
+    let top = r.bottom + 6;
+    if (left < 8) left = 8;
+    if (left + w > innerWidth - 8) left = innerWidth - w - 8;
+    if (top + h > innerHeight - 8) top = r.top - h - 6;
+    pop.style.left = left + 'px';
+    pop.style.top = Math.max(8, top) + 'px';
+
+    document.addEventListener('mousedown', onOutside, true);
+    document.addEventListener('keydown', onEsc, true);
+  }
+
   function setMark(o, color) {
     if (color) { marks.set(o.id, color); marked.set(o.id, o); }
     else { marks.delete(o.id); marked.delete(o.id); }
@@ -421,20 +492,11 @@ export async function screenObjects(videoId) {
           o.has_range
             ? `${hms(o.t_first)} – ${hms(o.t_last)} · ${dur(o.t_last - o.t_first)}`
             : `${hms(o.t_first)} · single frame`),
-        /* Kişi rengi — aynı insanı farklı track'lerde aynı renge boyamak
-           için. Timeline'daki vurgu bu renkten geliyor. Kapalıyken de
-           erişilebilir olmalı: sayfanın asıl işi bu. */
-        el('div.op-swrow', {},
-          PALETTE.map((c) => el('button.op-sw', {
-            class: mark === c ? 'on' : '',
-            title: c,
-            style: { background: c },
-            onclick: () => setMark(o, c),
-          })),
-          el('button.op-sw.none', {
-            class: mark ? '' : 'on', title: 'No colour',
-            onclick: () => setMark(o, null),
-          }, '✕'))),
+        /* PAR rozetleri. Eskiden burada renk paleti duruyordu; müşteri
+           sürekli görünen bir palet istemedi. Renk atama ızgaradaki noktaya
+           taşındı, bu satır artık asıl bilgiyi taşıyor: modelin kişi
+           hakkında ne dediği. */
+        el('div.op-parrow', {}, parChips(o))),
       el('div.col', { style: { gap: '5px' } },
         el('button.btn.sm.ghost', {
           onclick: () => {
@@ -452,10 +514,8 @@ export async function screenObjects(videoId) {
           }, '◎ Bestshot')
           : null)));
 
-    if (!infoOpen) {
-      infoBody.append(el('div.op-infopar', { title: parText }, parText));
-      return;
-    }
+    // PAR artık şeridin içinde rozet olarak; kapalı hâlde ek satır gerekmiyor.
+    if (!infoOpen) return;
     infoBody.append(el('div.op-infomore', {},
       el('dl.kv', {},
         [['class_id', o.class_id],

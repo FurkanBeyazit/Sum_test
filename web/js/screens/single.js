@@ -42,7 +42,6 @@ export async function screenSingle(videoId) {
   const events = evRes.items;
   const objects = objRes.items;
   const TM = new TimeMapper(video.start_time, summary.segments);
-  store.set({ videoId, video, summary, events, objects, duration: video.duration });
 
   // -------- üst şerit ----------------------------------------------------
   const hdr = el('div.hdr', {},
@@ -532,10 +531,10 @@ export async function screenSingle(videoId) {
       const o = objects.find(x => x.track_id === tid);
       if (o) showObject(o, videoId);
     };
-    overlay.onHover = (tid) => {
-      store.set({ hoverTrackId: tid });
-    };
-    const det = await api.detections(videoId, { from: 0, to: video.duration });
+    // Bayrak kapalıyken hiç sorma: kutu çizilmeyecekse veri de gerekmiyor.
+    const det = FEATURES.bbox
+      ? await api.detections(videoId, { from: 0, to: video.duration })
+      : null;
     /* Bu await sırasında kullanıcı başka bir ekrana geçmiş olabilir; o zaman
        DOM çoktan değişti ve aşağıdaki kurulum yok olmuş düğümlere yazıyor
        ("Cannot set properties of null"). Ekran hâlâ bizimse devam. */

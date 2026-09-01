@@ -731,11 +731,18 @@ export const backendApi = {
   },
 
   /** ffmpeg concat — uzun sürebilir, çağıran yerde beklemeli gösterin. */
-  mergeBuild: async (mergeId, trims, pads) => {
+  /**
+   * Birleştirmeyi başlatır.
+   *
+   * `segments`: ffmpeg'e gidecek SIRA — `[{part, in_ms, out_ms}, …]`.
+   * Aynı `part` birden çok kez geçebilir; araya giren bir klip alttakini
+   * ikiye böldüğünde böyle oluyor. Yükleme yine dosya başına tek.
+   */
+  mergeBuild: async (mergeId, segments, pads) => {
     const r = await fetch(`/api/merge/${mergeId}/build`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ trims: trims || [], pads: pads || [] }),
+      body: JSON.stringify({ segments: segments || [], pads: pads || [] }),
     });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d.detail || d.error || `HTTP ${r.status}`);
@@ -876,22 +883,48 @@ export const backendApi = {
      destekleniyorsa cevirebiliriz; desteklenmiyorsa msgpack cozucu gerekir ve
      onu harici kutuphane olmadan yazmak ayri bir is. Simdilik JSON deneniyor,
      olmazsa bos donuyor — kutular cizilmiyor, ekranin geri kalani calisiyor. */
-  detections: async (videoId) => {
-    const empty = { fps: 0, coord: 'xywh_norm', keys: [], cls_map: {}, rows: [] };
-    const v = await videoById(videoId);
-    if (!v || v.group_id == null || !v.start_time) return empty;
-    try {
-      const end = isoPlus(v.start_time, v.duration || 0);
-      const d = await req(`/playback/groups/${v.group_id}/bboxes`
-        + `?start_at=${encodeURIComponent(v.start_time)}`
-        + `&end_at=${encodeURIComponent(end)}&format=json`);
-      console.info('[live] ham bbox cevabi:', d);
-      return empty;          // sema gorulunce burada satirlara cevrilecek
-    } catch (e) {
-      console.info('[live] bbox alinamadi (format=json destekli mi?):', e.message);
-      return empty;
-    }
-  },
+  /**
+   * Video üstü kutular — `GET /playback/groups/{gid}/bboxes`.
+   *
+   * Uç 2026-09-01'de `format=json` desteklemeye başladı (önce yalnızca
+   * msgpack vardı ve `FEATURES.bbox` bu yüzden kapalıydı).
+   *
+   * ÜÇ TUHAFLIK
+   * -----------
+   * 1. GRUP KAPSAMLI. Cevap grubun BÜTÜN videolarının karelerini taşıyor;
+   *    `video_id` ile kendi videomuzu ayıklıyoruz.
+   * 2. DUVAR SAATİYLE sorgulanıyor, video saniyesiyle değil. Pencereyi
+   *    `start_at = video.start_time + from` diye kuruyoruz; cevaptaki
+   *    `time_seconds` de o `start_at`e göreli, yani `from` ekleyince video
+   *    saniyesi oluyor.
+   * 3. BÜYÜK. 64 saniyelik pencere 6.4 MB / 23 555 kutu. Beş dakikalık bir
+   *    kayıt tek istekte ~30 MB eder — o yüzden pencere pencere çekiliyor
+   *    ve her pencere önbelleğe giriyor.
+   *
+   * @param {object} o  {from, to} — video saniyesi
+   * @returns {{fps:number, coord:string, rows:Array}} overlay.js kablo biçimi:
+   *          [t, track_id, class_id, conf, x1, y1, x2, y2] — hepsi normalize
+   */
+  /**
+   * Video üstü kutular — ŞU AN KAPALI (`FEATURES.bbox`).
+   *
+   * Burada bir zamanlar ucun şemasını görmek için gerçek bir istek atılıyordu:
+   * cevabı konsola yazıp boş dönüyordu. Uç `format=json` desteklemeye
+   * başlayınca o yoklama ÇOK pahalı hâle geldi — üç dakikalık bir kayıt için
+   * 19.6 MB indirip çöpe atıyordu, hem de her ekran açılışında.
+   *
+   * Şema artık biliniyor (aşağıda). Bayrak açılana kadar hiç istek yok.
+   *
+   *   GET /playback/groups/{gid}/bboxes?start_at=&end_at=&format=json
+   *   → { frames: [{ video_id, frame_index, frame_time,
+   *                  bboxes: [{ track_id, class_id, confidence,
+   *                             x1, y1, x2, y2, time_seconds }] }] }
+   *
+   * Açarken dikkat: uç GRUP kapsamlı (kendi videomuzu `video_id` ile
+   * ayıklamak gerek), duvar saatiyle sorgulanıyor ve cevap büyük — pencere
+   * pencere çekilmeli.
+   */
+  detections: async () => ({ fps: 0, coord: 'xywh_norm', rows: [] }),
 
   /** Object Page — `/tracks`, sunucu tarafinda PAR filtresiyle. */
   /**
@@ -1145,8 +1178,13 @@ function buildSummary(video, res) {
   };
 }
 
-/** mod seçilmeden önce proxy index'ini yükler */
-export async function initBackend() {
-  await proxyIndex();
-  return backendApi;
-}
+/* `initBackend()` kaldırıldı (2026-09-01).
+
+   Tek yaptığı `proxyIndex()`i önden ısıtmaktı ve `core.js` bunu modül
+   düzeyinde `await` ediyordu. Bedeli ağırdı: `core.js`i import eden HER
+   modül o ağ isteğini bekliyordu, yani backend yavaşsa ekranda hiçbir şey
+   çizilmiyordu — hata mesajı bile değil, boş sayfa.
+
+   Isıtmaya zaten gerek yoktu: `videoById()` içinde `await proxyIndex()`
+   var ve fonksiyon sonucu kendi önbelleğine alıyor. İlk isteyen yüklüyor,
+   sonrakiler bedava. */

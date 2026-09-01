@@ -3,7 +3,7 @@
    ========================================================================== */
 
 import { el, mount, api, clockOf } from '../core.js';
-import { ROOT, onLeave, topbar } from '../ui.js';
+import { ROOT, topbar, startPolling } from '../ui.js';
 
 export async function screenSystem() {
   const gpuBox = el('div', { style: { padding: '12px', display: 'grid', gap: '14px' } });
@@ -67,9 +67,9 @@ export async function screenSystem() {
         gauge('RAM', g.host.ram_used_gb, g.host.ram_total_gb, 'GB'),
         gauge('디스크', g.host.disk_used_tb, g.host.disk_total_tb, 'TB')));
   }
-  await tick();
-  const iv = setInterval(tick, 2000);
-  onLeave(() => clearInterval(iv));
+  /* 2 saniye canlı gösterge hissi veriyordu ama GPU ölçümleri o çözünürlükte
+     bilgi taşımıyor; 10 saniye aynı işi beşte bir trafikle görüyor. */
+  startPolling(tick, 10000);
 
   async function loadLogs(level) {
     const r = await api.logs(level ? { level } : {});

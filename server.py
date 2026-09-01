@@ -28,6 +28,7 @@ kaldı. Tam çalışır hâli `archive/mock/` altında duruyor.
 """
 
 import argparse
+import hashlib
 import io
 import json
 import mimetypes
@@ -56,6 +57,17 @@ ARGS = None
 # uygulanmıyor ve gövdeler kırpılmıyor — akıp giden bir hatayı sonradan
 # aramanın tek yolu bu.
 LOG = None
+
+# Tekrar bastırma: "istek → son cevabın özeti" tablosu. Arayüz sağlık ve
+# katalog uçlarını yokluyor; cevap saatlerce aynı kalıyor ve log aynı
+# satırlarla doluyordu. Aynı cevap tekrar gelirse yazılmıyor, iki dakikada
+# bir tek satırlık özet düşüyor.
+REPEATS = {}
+REPEAT_NOTE_SEC = 120
+
+# Log dosyasına tek bir cevaptan yazılacak en fazla karakter. Terminal
+# `--live-body` ile ayrıca kırpılıyor; buradaki tavan dosya için.
+FILE_BODY_MAX = 200_000
 
 # Gerçek DVSummary backend'i. Tarayıcı buraya DOĞRUDAN istek atamaz (CORS),
 # bu yüzden /live/* isteklerini sunucu tarafında iletiyoruz.
@@ -440,9 +452,11 @@ class BoundedReader:
 
 
 class Handler(BaseHTTPRequestHandler):
-    # `live()` her istekte kendi değerini koyuyor; buradaki yalnızca
+    # `live()` her istekte kendi değerlerini koyuyor; buradakiler yalnızca
     # `_emit` o çağrıdan önce kullanılırsa diye güvenli varsayılan.
     _tty = True
+    _file = False
+    _buf = None        # None = doğrudan yaz, [] = cevabı bekle
 
     protocol_version = "HTTP/1.1"
     server_version = SERVER_NAME
@@ -537,30 +551,98 @@ class Handler(BaseHTTPRequestHandler):
         gövdeler kırpılıyor; dosya her şeyi tam alıyor. Bir hatayı canlı
         yakalayamadığında dosyaya dönüp bakabilesin diye — terminalde akıp
         giden bir şeyi geri saramıyorsun.
+
+        Cevap gelene kadar satırlar BEKLETİLİYOR (`self._buf`): aynı isteğin
+        aynı cevabı tekrar geldiyse istek satırını da yazmamak gerekiyor,
+        bunu ancak cevabı görünce bilebiliyoruz.
         """
+        if self._buf is not None:
+            self._buf.append((term, filed))
+            return
         if self._tty:
             print(term)
-        if LOG:
+        if self._file:
             LOG.write((filed if filed is not None else term) + "\n")
 
-    def _logged(self, rel):
-        """Bu istek terminale yazılsın mı?
+    def _flush(self):
+        """Bekletilen satırları yazar."""
+        buf = self._buf or []
+        self._buf = None
+        for term, filed in buf:
+            self._emit(term, filed)
 
-        Arayüz tek ekranda onlarca istek atıyor (her kırpım ayrı bir GET).
-        Aradığın tek cevap — mesela `POST /analysis` — bunların arasında
-        kayboluyordu. `--live-only` ile yalnızca eşleşenler yazılır:
+    def _mute(self):
+        """Bekletilenleri atar ve bu isteği tamamen sessize alır."""
+        self._buf = None
+        self._tty = False
+        self._file = False
 
-            python server.py --live-only /analysis --live-body -1
+    def _repeat(self, method, rel, code, data):
+        """Aynı istek aynı cevabı mı döndürdü?
 
-        Görüntü/video gövdeleri hiçbir zaman yazılmaz; okunacak bir şey yok
-        ve ekranı dolduruyorlar.
+        Arayüz sağlık, katalog ve kuyruk uçlarını yokluyor. Cevap saatlerce
+        birebir aynı kalıyor ve log dosyası aynı 40 satırla şişiyordu —
+        aradığın gerçek isteği bulmak imkânsız hâle geliyordu.
+
+        Aynı cevap tekrar gelirse hiçbir şey yazılmıyor. Yine de kaybolmasın
+        diye iki dakikada bir tek satırlık özet düşüyor:
+
+            ↺ GET /status/health · 200 · ayni cevap x37 (son 120 sn)
+
+        Cevap değişir değişmez tam kayıt geri geliyor — sayaç sıfırlanıyor.
+        """
+        key = f"{method} {rel}"
+        digest = hashlib.md5(data).digest() if isinstance(
+            data, (bytes, bytearray)) else None
+        now = time.time()
+        prev = REPEATS.get(key)
+
+        if not digest or not prev or prev["digest"] != digest \
+                or prev["code"] != code:
+            REPEATS[key] = {"digest": digest, "code": code,
+                            "count": 1, "noted": now}
+            return False
+
+        prev["count"] += 1
+        if now - prev["noted"] >= REPEAT_NOTE_SEC:
+            span = int(now - prev["noted"])
+            prev["noted"] = now
+            n = prev["count"]
+            prev["count"] = 1
+            line = (f"↺ {method} {rel} · {code} · ayni cevap x{n} "
+                    f"(son {span} sn)")
+            # Bekletilenleri at, yerine tek satır.
+            self._buf = None
+            if self._tty:
+                print(line)
+            if self._file:
+                LOG.write(f"[{time.strftime('%H:%M:%S')}] {line}\n")
+        return True
+
+    @staticmethod
+    def _is_noise(rel):
+        """Toplu medya trafiği — hiçbir hedefte okunmuyor.
+
+        Object ekranı tek açılışta 300 kırpım + 300 track ayrıntısı istiyor.
+        Bunlar ne terminalde ne dosyada işe yarıyor; log dosyasını asıl
+        şişiren de bunlardı (istek başına iki satır, sayfa başına ~1200).
         """
         if rel.startswith("/analysis/result/"):
-            # Kırpım görüntüleri ve track ayrıntıları: ekran başına yüzlerce
-            # istek, hiçbiri okunmuyor. Terminali doldurmasınlar.
             if rel.endswith("/crop") or "/track/" in rel:
-                return False
-        if "/segments/" in rel or rel.endswith("/stream"):
+                return True
+        return "/segments/" in rel or rel.endswith("/stream")
+
+    def _logged(self, rel):
+        """Bu istek TERMİNALE yazılsın mı?
+
+        `--live-only` yalnızca burada geçerli — dosya süzülmüyor:
+
+            python server.py --live-only /analysis --log-file
+
+        Terminalde sadece analiz istekleri kalır, dosyada (gürültü hariç)
+        her şey durur.
+        """
+        if self._is_noise(rel):
             return False
         only = getattr(ARGS, "live_only", None)
         return (only in rel) if only else True
@@ -594,11 +676,18 @@ class Handler(BaseHTTPRequestHandler):
             req.add_header("Content-Length", str(n))
 
         rng = self.headers.get("Range")
-        # Terminale yazilacak mi? Dosyaya HER ISTEK yaziliyor; suzgec yalnizca
-        # ekrani okunur tutmak icin. Hicbir hedef yoksa bicimlendirme isine
-        # hic girmiyoruz - ekran basina yuzlerce kirpim istegi geliyor.
+        # İki ayrı hedef, iki ayrı kural:
+        #   terminal → gürültü hariç + `--live-only` süzgeci
+        #   dosya    → gürültü hariç, başka süzgeç yok, gövdeler tam
+        # Gürültü (kırpım/track/stream) ikisinde de yok: sayfa başına yüzlerce
+        # istek, hiçbiri okunmuyor.
+        noise = self._is_noise(rel)
         self._tty = self._logged(rel)
-        if not self._tty and not LOG:
+        self._file = LOG is not None and not noise
+        # Cevabı görene kadar hiçbir şey yazmıyoruz: aynı cevap tekrar
+        # geldiyse istek satırı da yazılmamalı (bkz. _repeat).
+        self._buf = []
+        if not self._tty and not self._file:
             try:
                 with urllib.request.urlopen(req, timeout=120) as r:
                     return self._relay(r, r.status)
@@ -632,6 +721,7 @@ class Handler(BaseHTTPRequestHandler):
             self._live_done(method, rel, e, e.code, t0)
         except Exception as e:
             self._emit(f"← BAĞLANTI HATASI  ({(time.time()-t0)*1000:.0f} ms)  {e}")
+            self._flush()
             self.err(502, "live_unreachable", f"{LIVE_BASE} — {e}")
 
     def _live_done(self, method, rel, r, code, t0):
@@ -646,9 +736,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if "json" in ctype or "text" in ctype:
             data = r.read()
-            self._emit(f"← {mark} {code}  {el:.0f} ms  "
-                       f"{len(data)/1024:.1f} KB  {ctype}")
-            self._dump("  gelen", data)
+            # Aynı istek + aynı cevap → hiçbir şey yazma (bkz. _repeat).
+            if self._repeat(method, rel, code, data):
+                self._mute()
+            else:
+                self._emit(f"← {mark} {code}  {el:.0f} ms  "
+                           f"{len(data)/1024:.1f} KB  {ctype}")
+                self._dump("  gelen", data)
+                self._flush()
             self.send_response(code)
             self.send_header("Content-Type", ctype or "application/json")
             self.send_header("Content-Length", str(len(data)))
@@ -665,18 +760,21 @@ class Handler(BaseHTTPRequestHandler):
         size = f"{int(cl)/1024:.0f} KB" if cl else "?"
         self._emit(f"← {mark} {code}  {el:.0f} ms  {size}  "
                    f"{ctype or 'ikili veri'}" + (f"  [{cr}]" if cr else ""))
+        self._flush()
         self._relay(r, code)
 
     def _dump(self, label, raw):
         """Gövdeyi okunur biçimde yazar.
 
-        Terminal ile dosya burada ayrışıyor: `--live-body` yalnızca TERMİNALİ
-        kırpıyor, dosyaya her zaman tamamı gidiyor. Sebebi basit — ekranda
-        2000 satırlık bir cevap işe yaramıyor, ama sonradan `grep` atacağın
-        dosyada kırpılmış cevap da işe yaramıyor.
+        Terminal ile dosya ayrışıyor: `--live-body` yalnızca TERMİNALİ
+        kırpıyor, dosyaya çok daha geniş bir pay veriliyor. Ekranda 2000
+        satırlık bir cevap işe yaramıyor; dosyada kırpılmış cevap da
+        yaramıyor. Ama dosyanın da bir tavanı var (FILE_BODY_MAX): tek bir
+        bbox cevabı 19 MB gelebiliyor ve log'u tek başına kullanılmaz hâle
+        getiriyordu.
         """
         limit = ARGS.live_body if ARGS else 800
-        if limit == 0 and not LOG:
+        if limit == 0 and not self._file:
             return
         if not isinstance(raw, (bytes, bytearray)):
             # akış nesnesi — okumak gövdeyi tüketirdi
@@ -689,7 +787,12 @@ class Handler(BaseHTTPRequestHandler):
             txt = raw.decode("utf-8", "replace")
 
         pad = "\n    "
-        full = f"{label}:{pad}" + txt.replace("\n", pad)
+        body = txt
+        if len(body) > FILE_BODY_MAX:
+            body = body[:FILE_BODY_MAX] + (
+                f"\n  … (+{len(txt) - FILE_BODY_MAX} karakter kesildi; "
+                f"cevap {len(txt)} karakter)")
+        full = f"{label}:{pad}" + body.replace("\n", pad)
 
         short = txt
         if limit > 0 and len(short) > limit:
@@ -699,7 +802,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if term:
             self._emit(term, full)
-        elif LOG:
+        elif self._file:
             LOG.write(full + "\n")
 
     def _relay(self, r, code):
@@ -900,25 +1003,53 @@ class Handler(BaseHTTPRequestHandler):
             if not m["parts"]:
                 return self.err(400, "no_parts", "önce parça yükleyin")
             order = sorted(m["parts"])
-            paths = [m["parts"][i]["path"] for i in order]
-            # Gövde isteğe bağlı: {"trims": [{"index":0,"in_ms":0,"out_ms":8200}, …]}
             b = self.body_json()
-            by_idx = {}
-            for t in (b.get("trims") or []):
+
+            # -- SEGMENT listesi (tercih edilen biçim) ----------------------
+            # {"segments": [{"part":0,"in_ms":0,"out_ms":30000},
+            #               {"part":1,"in_ms":0,"out_ms":10000},
+            #               {"part":0,"in_ms":30000,"out_ms":60000}]}
+            #
+            # Aynı parça birden çok kez geçebilir: duvar saatinde bir klibin
+            # ortasında başlayan başka bir klip alttakini ikiye böler ve araya
+            # girer. Eskiden gövde parça başına TEK kesim alıyordu, yani böyle
+            # bir sıra ifade edilemiyordu.
+            paths, trims = [], []
+            for sgm in (b.get("segments") or []):
                 try:
-                    by_idx[int(t.get("index"))] = (
-                        (t.get("in_ms") or 0) / 1000.0,
-                        None if t.get("out_ms") is None else t["out_ms"] / 1000.0)
+                    pi = int(sgm.get("part"))
                 except (TypeError, ValueError):
                     continue
-            trims = [by_idx.get(i) for i in order]
+                if pi not in m["parts"]:
+                    return self.err(400, "bad_segment",
+                                    f"parça {pi} yüklenmemiş")
+                paths.append(m["parts"][pi]["path"])
+                trims.append(((sgm.get("in_ms") or 0) / 1000.0,
+                              None if sgm.get("out_ms") is None
+                              else sgm["out_ms"] / 1000.0))
+
+            # -- eski biçim: parça başına tek kesim -------------------------
+            # {"trims": [{"index":0,"in_ms":0,"out_ms":8200}, …]}
+            if not paths:
+                paths = [m["parts"][i]["path"] for i in order]
+                by_idx = {}
+                for t in (b.get("trims") or []):
+                    try:
+                        by_idx[int(t.get("index"))] = (
+                            (t.get("in_ms") or 0) / 1000.0,
+                            None if t.get("out_ms") is None
+                            else t["out_ms"] / 1000.0)
+                    except (TypeError, ValueError):
+                        continue
+                trims = [by_idx.get(i) for i in order]
+
             pad_idx = {}
             for t in (b.get("pads") or []):
                 try:
                     pad_idx[int(t.get("index"))] = (t.get("pad_ms") or 0) / 1000.0
                 except (TypeError, ValueError):
                     continue
-            pads = [pad_idx.get(i, 0.0) for i in order]
+            pads = [pad_idx.get(i, 0.0) for i in range(len(paths))]
             out = m["dir"] / "merged.mp4"
             print(f"  merge {mid}: {len(paths)} parça birleştiriliyor…")
             t0 = time.time()

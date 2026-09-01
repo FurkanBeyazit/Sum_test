@@ -32,7 +32,7 @@ async function route() {
   }
   if (!store.get('groups').length) {
     const g = await api.groups();
-    store.set({ groups: g.groups, eventTypes: g.event_types });
+    store.set({ groups: g.groups });
     store.set({ attributes: await api.attributes() });
   }
 
@@ -117,9 +117,9 @@ async function boot() {
   route();
 }
 
-/* core.js canlı modda dinamik import için top-level await kullanıyor; bu
-   sırada DOMContentLoaded çoktan tetiklenmiş olabilir. Olay kaçtıysa
-   doğrudan başlat — yoksa ekran sonsuza kadar "로딩 중…" kalır. */
+/* Olay çoktan geçmiş olabilir (modül grafiği bir şeyi beklediyse). Kaçırılan
+   `DOMContentLoaded` ekranı sonsuza kadar "로딩 중…" bırakırdı; readyState'e
+   bakıp doğrudan başlıyoruz. */
 if (document.readyState === 'loading') {
   window.addEventListener('DOMContentLoaded', boot);
 } else {

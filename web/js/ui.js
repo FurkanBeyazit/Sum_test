@@ -15,6 +15,53 @@ let CLEANUP = [];
 export function onLeave(fn) { CLEANUP.push(fn); }
 export function runCleanup() { CLEANUP.forEach(f => { try { f(); } catch {} }); CLEANUP = []; }
 
+/**
+ * Ekranların ortak yoklama döngüsü.
+ *
+ * Dört ekran bunu ayrı ayrı yazıyordu ve hepsi aynı iki şeyi kaçırıyordu:
+ *
+ *   1. SEKME ARKA PLANDAYKEN DE İSTEK ATIYORLARDI. Açık bırakılmış bir
+ *      sekme gece boyunca backend'i yokluyor, log dosyası şişiyordu.
+ *      Burada `document.hidden` iken istek atlanıyor, sekmeye dönülünce
+ *      hemen bir tur koşuluyor — kullanıcı bayat veri görmüyor.
+ *   2. Bir tur bitmeden bir sonraki başlayabiliyordu (`setInterval`).
+ *      Zincirleme `setTimeout` ile her tur bir öncekinin BİTİŞİNDEN sonra
+ *      planlanıyor; backend yavaşlarsa istekler üst üste binmiyor.
+ *
+ * @param {() => any} fn          her turda çağrılır (async olabilir)
+ * @param {number|() => number} every  bekleme (ms) — son turun sonucuna göre
+ *                                     değişebilsin diye fonksiyon da olabilir
+ */
+export function startPolling(fn, every) {
+  let alive = true;
+  let timer = null;
+  const wait = () => (typeof every === 'function' ? every() : every);
+
+  const tick = async () => {
+    if (!alive) return;
+    if (document.hidden) {           // görünmüyorsa istek yok, sadece bekle
+      timer = setTimeout(tick, 5000);
+      return;
+    }
+    try { await fn(); } catch { /* ekran kendi hatasını gösterir */ }
+    if (alive) timer = setTimeout(tick, wait());
+  };
+
+  const onVisible = () => {
+    if (!alive || document.hidden) return;
+    clearTimeout(timer);
+    tick();                          // sekmeye dönüldü — hemen tazele
+  };
+  document.addEventListener('visibilitychange', onVisible);
+
+  tick();
+  onLeave(() => {
+    alive = false;
+    clearTimeout(timer);
+    document.removeEventListener('visibilitychange', onVisible);
+  });
+}
+
 const STATUS_LABEL = {
   registered: 'Registered', uploading: 'Uploading', ready: 'Ready',
   analyzing: 'Analyzing', completed: 'Completed', failed: 'Failed',
@@ -32,13 +79,16 @@ export function topbar(active) {
      bir video id'si ister; katalog boşsa (hiç video yüklenmemişse) adresi boş
      bırakıyoruz, yönlendirici Home'a düşürüyor. */
   const first = (store.get('groups').flatMap((g) => g.cameras || [])[0] || {}).id;
+  /* Sıra: Object, Analysis'ten ÖNCE. Kullanıcı önce "kim vardı" diye bakıp
+     sonra o kişinin olaylarına iniyor; ekranların sırası bu akışı izlesin.
+
+     Manage ve System sekme çubuğundan çıktı — ikisi de günlük iş değil,
+     ayar. Manage sağdaki dişliye taşındı; System'in zaten karşılığı yok. */
   const tabs = [
     ['home', 'Home', '#/home'],
     ['upload', 'Upload & Analysis', '#/upload'],
-    ['single', 'Analysis', `#/single/${first || ''}`],
     ...(FEATURES.objects ? [['objects', 'Object', `#/objects/${first || ''}`]] : []),
-    ['manage', 'Manage', '#/manage'],
-    ['system', t('system'), '#/system'],
+    ['single', 'Analysis', `#/single/${first || ''}`],
   ];
   return el('div.topbar',
     // Logo veya program adına tıklayınca ana sayfaya dönülür
@@ -50,6 +100,13 @@ export function topbar(active) {
     el('div.grow'),
     el('div.row', { class: 'tiny muted' },
       el('span', { id: 'srvstat' }, '● Connected')),
+    /* Manage: sekme değil, sağ köşede dişli. Grup/video düzenlemek günde bir
+       kez yapılan bir iş; sekme çubuğunda her zaman görünmesi çalışma
+       ekranlarıyla aynı ağırlıkta olduğu izlenimi veriyordu. */
+    el('a.iconbtn.gear', {
+      href: '#/manage', title: 'Manage — groups, videos, analysis queue',
+      class: active === 'manage' ? 'iconbtn gear on' : 'iconbtn gear',
+    }, '⚙'),
     el('div.row', { style: { gap: '6px', marginLeft: '4px' } },
       el('span', { class: 'tiny' }, '👤'),
       el('span', { class: 'tiny' }, (store.get('user') || {}).username || 'admin'),

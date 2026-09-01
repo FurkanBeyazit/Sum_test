@@ -135,11 +135,19 @@ export async function screenManage() {
       ['video', 'status', 'progress', 'worker', 'queued', 'took', 'try', ''],
       trs, 'The queue is empty.'));
 
+    /* Yoklama YALNIZCA çalışan iş varken. Kuyruk boşken hiç istek gitmiyor;
+       yeni iş kullanıcı bir şey başlattığında zaten `load()` ile geliyor.
+       3 saniye 6'ya çıktı — analiz dakikalar sürüyor, saniyede bir sormanın
+       karşılığı yok. Sekme arka plandaysa tur atlanıyor. */
     clearTimeout(poll);
     if (rows.some((j) => j.status === 'running' || j.status === 'queued')) {
-      poll = setTimeout(() => {
-        if (location.hash.startsWith('#/manage')) drawQueue();
-      }, 3000);
+      const again = () => {
+        if (!location.hash.startsWith('#/manage')) return;
+        // Sekme arka plandaysa istek atma, sadece tekrar dene.
+        if (document.hidden) { poll = setTimeout(again, 6000); return; }
+        drawQueue();
+      };
+      poll = setTimeout(again, 6000);
       onLeave(() => clearTimeout(poll));
     }
   }

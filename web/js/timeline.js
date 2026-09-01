@@ -24,8 +24,14 @@ export class Timeline {
     this.mode = opts.mode || 'single';
     this.lanes = [];          // [{ id, label, sub, events:[], color }]
     this.t0 = 0;              // görünen pencere başı (saniye)
-    this.t1 = 60;             // görünen pencere sonu
+    this.t1 = 60;             // görünen pencere sonu — setData tümüne açıyor
     this.total = 60;          // toplam süre
+    /* Kullanıcı zoom/pan yaptı mı? `setData` buna bakıyor: yapmadıysa yeni
+       veri geldiğinde pencere tüm süreye açılıyor. Eskiden başlangıç değeri
+       60 sn olarak kalıyordu ve 5 dakikalık bir video ilk 60 saniyesine
+       zoomlanmış açılıyordu — kullanıcı tekerlekle uzaklaşmadan tamamını
+       göremiyordu. */
+    this._userZoom = false;
     this.playhead = 0;
     this.startIso = null;     // duvar saati gösterimi için
     this.heat = null;         // [{t0,t1,score,candidate}] — aday구간 skorları
@@ -57,11 +63,19 @@ export class Timeline {
     if (startIso !== undefined) this.startIso = startIso;
     this.heat = heat || null;
     this.tracks = tracks || null;
-    if (this.t1 <= this.t0 || this.t1 > this.total * 1.5) this.fit();
+    // Kullanıcı kendi penceresini seçmediyse her zaman tümünü göster.
+    if (!this._userZoom || this.t1 <= this.t0 || this.t1 > this.total * 1.5) {
+      this.fit();
+    }
     this.resize();
   }
 
-  fit() { this.t0 = 0; this.t1 = this.total || 1; this.draw(); }
+  fit() {
+    this.t0 = 0;
+    this.t1 = this.total || 1;
+    this._userZoom = false;      // "tümü" hâli, zoom sayılmaz
+    this.draw();
+  }
 
   height() {
     return HEAD_H + Math.max(1, this.lanes.length) * ROW_H + 10;
@@ -371,6 +385,7 @@ export class Timeline {
       if (a < 0) { b -= a; a = 0; }
       if (b > this.total) { a -= b - this.total; b = this.total; }
       this.t0 = Math.max(0, a); this.t1 = Math.min(this.total, b);
+      this._userZoom = !(this.t0 <= 0 && this.t1 >= this.total);
       this.draw();
       return;
     }
@@ -390,7 +405,9 @@ export class Timeline {
     if (b - a > this.total) { a = 0; b = this.total; }
     if (b - a < 0.8) return;
     this.t0 = Math.max(0, a); this.t1 = Math.min(this.total, b);
-    if (this.t1 <= this.t0) this.fit();
+    if (this.t1 <= this.t0) return this.fit();
+    // Kullanicinin kendi secimi: yeni veri gelince ustune yazma.
+    this._userZoom = !(this.t0 <= 0 && this.t1 >= this.total);
     this.draw();
   }
 }

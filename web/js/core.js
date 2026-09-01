@@ -6,7 +6,7 @@
    tutmanın karşılığı kalmamıştı. Çalışır hâli `archive/mock/` altında.
    ========================================================================= */
 
-import { initBackend } from './backend.js';
+import { backendApi } from './backend.js';
 
 /* ------------------------------------------------------------ özellikler --
    Backend'in hazır olma durumuna göre arayüzü açıp kapatır.
@@ -81,26 +81,25 @@ export function mount(n, ...kids) { clear(n); add(n, kids); return n; }
 
 /* -------------------------------------------------------------- store ---- */
 
+/* Ekranlar ARASI taşınan durum. Sadece bu.
+   -------------------------------------------------------------------------
+   Ekrana özel durum (seçili nesne, atanmış renkler, açık panel) buraya
+   girmiyor: ekran fonksiyonunun kapanışında yaşıyor ve ekran kapanınca
+   kendiliğinden gidiyor.
+
+   YAYIN/ABONE YOK. Sınıfın bir zamanlar `on()/emit()/touch()` metodları
+   vardı ve hiçbir yerde kullanılmıyordu — ekranlar `mount()` ile kendini
+   bütün olarak yeniden çiziyor, parça parça güncellemiyor. Kullanılmayan bir
+   soyutlama, olmayandan kötü: bakan biri reaktif bir sistem arıyor.
+   Gerekirse geri eklenir; o gün gelene kadar iki metot yeter.
+
+   Aynı sebeple ~18 ölü anahtar da silindi (`playing`, `showTrails`,
+   `segments`, `reid`, `jobs`…). Hepsi mock döneminden kalmıştı; hiçbiri
+   okunmuyordu. */
 class Store {
-  constructor(init) { this.s = init; this.subs = new Map(); this.n = 0; }
+  constructor(init) { this.s = init; }
   get(k) { return this.s[k]; }
-  set(patch) {
-    const changed = [];
-    for (const [k, v] of Object.entries(patch)) {
-      if (this.s[k] !== v) { this.s[k] = v; changed.push(k); }
-      else this.s[k] = v;
-    }
-    for (const k of Object.keys(patch)) this.emit(k);
-    this.emit('*');
-  }
-  /** Nesne içeriği değişmişse bile bildirim gönder (dizi mutasyonları için). */
-  touch(...keys) { keys.forEach(k => this.emit(k)); this.emit('*'); }
-  on(key, fn) {
-    if (!this.subs.has(key)) this.subs.set(key, new Set());
-    this.subs.get(key).add(fn);
-    return () => this.subs.get(key).delete(fn);
-  }
-  emit(key) { (this.subs.get(key) || []).forEach(f => { try { f(this.s); } catch (e) { console.error(e); } }); }
+  set(patch) { Object.assign(this.s, patch); }
 }
 
 export const store = new Store({
@@ -110,35 +109,11 @@ export const store = new Store({
      kaldırıldı; localStorage'da kalmış olabilir, ona düşmüyoruz. */
   lang: localStorage.getItem('lang') === 'ko' ? 'ko' : 'en',
   groups: [],
-  eventTypes: {},
   attributes: null,
 
-  videoId: null,
-  video: null,
-  summary: null,
-  events: [],
-  objects: [],
-  detections: null,     // { fps, rows, byTime: Map }
-  segments: null,
-
-  playhead: 0,          // medya zamanı (saniye)
-  duration: 0,
-  playing: false,
-  showBoxes: true,
-  showTrails: true,
-  showLabels: true,
-
   filters: { cls: '', gender: '', upper_color: [], carry: [], age: '' },
+  playhead: 0,          // medya zamanı (saniye) — video yokken okunur
   activeEventId: null,
-  hoverTrackId: null,
-  selectedTrackIds: [],
-
-  search: null,         // { query, items, total, latency_ms }
-  candidates: null,     // event_candidate_score pencereleri
-  reid: null,           // { session, query, candidates, status }
-  tracklist: { id: 'TL1', members: [] },
-  jobs: [],
-  gpu: null,
 });
 
 /* ------------------------------------------------------------- i18n ------ */
@@ -281,11 +256,14 @@ export class TimeMapper {
   }
 }
 
-/* Tek veri kaynağı. ES modül canlı bağlaması sayesinde ekranlarda
-   `import { api }` satırı hiç değişmiyor — işaret ettiği nesne burada
-   bir kez kurulur. */
-export let api = await initBackend();
-console.info('[core] backend: /live -> DVSummary');
+/* Tek veri kaynağı. Ekranlar `import { api }` yazıyor, altındaki adaptörü
+   bilmiyor.
+
+   MODÜL DÜZEYİNDE `await` YOK. Eskiden burada `await initBackend()` vardı ve
+   `core.js`i import eden her modül o ağ isteğini bekliyordu: backend yavaşsa
+   ekran boş kalıyordu. Adaptör artık senkron kuruluyor; ağa çıkan ilk iş
+   `app.js` içindeki `boot()` — orada hata yakalanıp kullanıcıya gösteriliyor. */
+export const api = backendApi;
 
 /* ----------------------------------------------------------- SSE utils --- */
 /**

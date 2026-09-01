@@ -7,7 +7,7 @@
    ========================================================================== */
 
 import { el, mount, api, toast } from '../core.js';
-import { ROOT, onLeave, topbar, treePanel } from '../ui.js';
+import { ROOT, topbar, treePanel, startPolling } from '../ui.js';
 
 export async function screenHome() {
   const sidebar = el('div.sidebar', {},
@@ -113,7 +113,7 @@ export async function screenHome() {
         w.status !== 'unavailable', w.status)),
       line('LLM server', h.vllm && h.vllm.status === 'ok'));
   }
-  tick();
-  const iv = setInterval(tick, 5000);
-  onLeave(() => clearInterval(iv));
+  /* 5 saniyeden 20'ye çıktı: sunucu sağlığı o hızla değişmiyor ve açık
+     bırakılan sekme günde binlerce istek üretiyordu. */
+  startPolling(tick, 20000);
 }
