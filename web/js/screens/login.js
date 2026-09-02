@@ -3,8 +3,7 @@
    ========================================================================== */
 
 import { el, mount, store, api } from '../core.js';
-import { ROOT, onLeave } from '../ui.js';
-import { mountFibers } from '../fx/fibers.js';
+import { ROOT } from '../ui.js';
 
 export function screenLogin() {
   const u = el('input.input', { value: 'admin', autofocus: true });
@@ -33,11 +32,9 @@ export function screenLogin() {
     }, 'Backend henüz kimlik doğrulaması istemiyor — herhangi bir değer geçer.'));
   card.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
 
-  /* Hareketli arka plan yalnizca burada. Giris ekrani tek bir kart tasiyor:
-     GPU'yu paylasacagi video cozme, timeline canvas'i ve bbox katmani yok.
-     WebGL2 yoksa mountFibers bos donuyor, altindaki CSS degradesi kaliyor. */
-  const page = el('div.loginpage', {}, card);
-  mount(ROOT(), page);
-  const fx = mountFibers(page);
-  onLeave(() => fx.destroy());
+  /* Arka plan efekti artik burada degil: aurora uygulamanin tamaminin
+     altinda duruyor (fx/aurora.js, app.js'te bir kez baglaniyor). Giris
+     ekrani bu projede yer tutucu — efekti yalniz buraya koymak, kimsenin
+     gormedigi bir yere koymakti. */
+  mount(ROOT(), el('div.loginpage', {}, card));
 }

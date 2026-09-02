@@ -24,16 +24,16 @@
 import {
   el, mount, clear, store, api, hms, dur, bytes, clockOf, toast, modal,
 } from '../core.js';
-import { ROOT, onLeave, topbar, confirmModal } from '../ui.js';
+import {
+  ROOT, onLeave, topbar, confirmModal, statusChip, skeletonRows,
+} from '../ui.js';
 
 /* Hem video durumları (mapStatus çıktısı) hem kuyruk durumları aynı rozeti
    kullanıyor — ikisi farklı sözlük ama kullanıcı için aynı şey: yeşil iyi,
    mavi çalışıyor, kırmızı bozuk. */
-const STATUS_TONE = {
-  completed: 'ok', analyzing: 'run', ready: 'idle',
-  registered: 'idle', failed: 'err',
-  running: 'run', queued: 'idle', canceled: 'idle',
-};
+/* Durum tonlari ui.js'te tek kaynakta: kuyruk rozetiyle Analysis
+   basligindaki rozet ayni skalayi kullansin. Burada ayri bir tablo
+   tutuldugu icin "analyzing" bir ekranda mavi, otekinde sariydi. */
 
 export async function screenManage() {
   const stage = el('div.stage');
@@ -81,6 +81,9 @@ export async function screenManage() {
      Gerçek API'de SSE yok; devam eden iş varken 3 sn'de bir yokluyoruz.
      Hepsi bitince yoklama kendiliğinden duruyor, boşuna istek atılmıyor. */
   async function drawQueue() {
+    /* Ilk turda kuyruk bos gorunmesin: yoklama 6 saniyede bir donuyor ve
+       arada panel bos kaliyordu. */
+    if (!queueBody.firstChild) { clear(queueBody); queueBody.append(skeletonRows(3)); }
     let rows = [];
     try {
       rows = (await api.jobs()).items || [];
@@ -325,7 +328,7 @@ function btn(label, onclick, kind) {
 }
 
 function pill(status) {
-  return el('span', { class: `mg-pill ${STATUS_TONE[status] || 'idle'}` }, status);
+  return statusChip(status, status);
 }
 
 /**

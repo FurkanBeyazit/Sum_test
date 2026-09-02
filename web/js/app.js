@@ -8,6 +8,7 @@
 
 import { el, mount, store, api, toast } from './core.js';
 import { ROOT, runCleanup, topbar } from './ui.js';
+import { mountAurora } from './fx/aurora.js';
 import { screenLogin } from './screens/login.js';
 import { screenSingle } from './screens/single.js';
 import { screenObjects } from './screens/objects.js';
@@ -97,6 +98,9 @@ async function route() {
 window.addEventListener('hashchange', route);
 
 async function boot() {
+  /* Arka plan health çağrısından ÖNCE: backend yavaşsa kullanıcı boş siyah
+     ekrana değil, boyanmış bir ekrana bakıyor. */
+  mountAurora();
   try {
     const h = await api.health();
     const s = document.getElementById('srvstat');

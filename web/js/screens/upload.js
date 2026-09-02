@@ -17,7 +17,7 @@
    ========================================================================== */
 
 import {
-  el, mount, clear, store, api, t, hms, ms, dur, bytes, pad,
+  FEATURES, el, mount, clear, store, api, t, hms, ms, dur, bytes, pad,
   toast, modal
 } from '../core.js';
 import {
@@ -108,7 +108,9 @@ const UP = {
   sel: 0,
   /* Birleştirme kipi: parçalar ffmpeg ile TEK bir MP4'e çevrilip backend'e
      tek video olarak gider. Kapalıyken her parça ayrı video_id alır. */
-  merge: true,
+  /* Varsayilan AÇIK ve onay kutusu gizli (FEATURES.mergeToggle): bu ekip
+     her zaman birlestiriyor. */
+  merge: FEATURES.merge,
   mergedId: null, // birleştirme sonrası oluşan video_id
 };
 
@@ -1116,17 +1118,19 @@ export async function screenUpload() {
           }, '✂ Trim overlaps'),
           fileInput),
 
-        /* Birleştirme kipi. Varsayılan AÇIK: kullanıcı Upload ekranında
-           parçaları tek bir zaman çizgisine dizdiğinde beklentisi tek bir
-           kayıt elde etmek. Kapatılırsa her parça ayrı video_id alır. */
-        el('div.row', { style: { gap: '8px', alignItems: 'flex-start' } },
-          el('label', { class: 'row', style: { gap: '6px', cursor: 'pointer' } },
-            el('input', {
-              type: 'checkbox', checked: UP.merge,
-              onchange: (e) => { UP.merge = e.target.checked; drawMergeNote(); },
-            }),
-            el('span', {}, 'Merge into a single video')),
-          mergeNote),
+        /* Onay kutusu yalnizca FEATURES.mergeToggle ile ciziliyor.
+           Birlestirmenin KENDISI acik kaliyor (FEATURES.merge) — gizlenen
+           sey ozellik degil, kullanicinin onu kapatabilme yetkisi. */
+        FEATURES.mergeToggle
+          ? el('div.row', { style: { gap: '8px', alignItems: 'flex-start' } },
+            el('label', { class: 'row', style: { gap: '6px', cursor: 'pointer' } },
+              el('input', {
+                type: 'checkbox', checked: UP.merge,
+                onchange: (e) => { UP.merge = e.target.checked; drawMergeNote(); },
+              }),
+              el('span', {}, 'Merge into a single video')),
+            mergeNote)
+          : null,
 
         tlBox,
         infoBox,

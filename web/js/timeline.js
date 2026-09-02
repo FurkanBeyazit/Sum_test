@@ -77,8 +77,11 @@ export class Timeline {
     this.draw();
   }
 
+  /** Şeritlerin başladığı y. */
+  get lanesY() { return HEAD_H; }
+
   height() {
-    return HEAD_H + Math.max(1, this.lanes.length) * ROW_H + 10;
+    return this.lanesY + Math.max(1, this.lanes.length) * ROW_H + 10;
   }
 
   resize() {
@@ -178,8 +181,9 @@ export class Timeline {
     }
 
     // --- satırlar ---------------------------------------------------------
+    const LY = this.lanesY;
     this.lanes.forEach((lane, i) => {
-      const y = HEAD_H + i * ROW_H;
+      const y = LY + i * ROW_H;
       if (i % 2 === 0) { c.fillStyle = '#0d131b'; c.fillRect(0, y, W, ROW_H); }
 
       if (this.mode === 'multi') {
@@ -209,7 +213,12 @@ export class Timeline {
         const by = y + (ROW_H - h) / 2;
 
         c.save();
-        c.globalAlpha = active ? 1 : (hov ? .95 : .78);
+        /* ŞERİT HİYERARŞİSİ. Kullanıcının renklendirdiği şerit (`marked`)
+           kendi rengiyle hafifçe parlıyor, boyanmamış olan sönük kalıyor.
+           200 track dört satıra paketlendiğinde hepsi aynı ağırlıkta
+           çizilirse işaretlenen kişi kalabalığın içinde kayboluyordu —
+           renk vermenin tek amacı onu bulmaktı. */
+        c.globalAlpha = active ? 1 : (hov ? .95 : (e.marked ? .92 : .5));
         c.fillStyle = e.color || '#64748b';
         this._rr(c, x, by, w, h, 2.5);
         c.fill();
@@ -218,9 +227,9 @@ export class Timeline {
           c.strokeStyle = '#fff'; c.lineWidth = 1;
           this._rr(c, x, by, w, h, 2.5); c.stroke();
         }
-        if (active) {
+        if (active || e.marked) {
           c.globalAlpha = 1;
-          c.shadowColor = e.color; c.shadowBlur = 10;
+          c.shadowColor = e.color; c.shadowBlur = active ? 12 : 7;
           this._rr(c, x, by, w, h, 2.5); c.fill();
         }
         c.restore();
@@ -307,8 +316,8 @@ export class Timeline {
       const ia = byId.get(a.laneId), ib = byId.get(b.laneId);
       if (ia === undefined || ib === undefined) continue;
       const x1 = this.X(a.t1), x2 = this.X(b.t0);
-      const y1 = HEAD_H + ia * ROW_H + ROW_H - 3.5;
-      const y2 = HEAD_H + ib * ROW_H + ROW_H - 3.5;
+      const y1 = this.lanesY + ia * ROW_H + ROW_H - 3.5;
+      const y2 = this.lanesY + ib * ROW_H + ROW_H - 3.5;
       c.save();
       c.strokeStyle = a.color || '#f472b6';
       c.globalAlpha = .5; c.lineWidth = 1.4; c.setLineDash([3, 3]);
@@ -357,15 +366,15 @@ export class Timeline {
     return [e.clientX - r.left, e.clientY - r.top];
   }
   _pick(x, y) {
-    if (y < HEAD_H) return null;
-    const i = Math.floor((y - HEAD_H) / ROW_H);
+    if (y < this.lanesY) return null;
+    const i = Math.floor((y - this.lanesY) / ROW_H);
     const lane = this.lanes[i];
     if (!lane) return null;
     const t = this.T(x);
     for (const e of lane.events || []) {
       const ex = this.X(e.t_start), ew = Math.max(4, this.X(e.t_end) - ex);
       if (x >= ex - 2 && x <= ex + ew + 2)
-        return { ...e, _y: HEAD_H + i * ROW_H + ROW_H / 2, _lane: lane };
+        return { ...e, _y: this.lanesY + i * ROW_H + ROW_H / 2, _lane: lane };
     }
     return null;
   }

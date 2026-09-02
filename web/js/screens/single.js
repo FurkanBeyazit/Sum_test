@@ -10,7 +10,8 @@ import {
 import { VideoOverlay } from '../overlay.js';
 import { Timeline } from '../timeline.js';
 import {
-  ROOT, onLeave, statusLabel, topbar, treePanel, askReanalyze, findCam
+  ROOT, onLeave, statusLabel, topbar, treePanel, askReanalyze, findCam,
+  statusChip, skeletonRows,
 } from '../ui.js';
 
 export async function screenSingle(videoId) {
@@ -50,7 +51,9 @@ export async function screenSingle(videoId) {
         el('span.par', {}, cam.group_name || 'Area'),
         el('span.sep', {}, '›'),
         el('span.cur', {}, video.name),
-        el('span', { class: 'badge ' + video.status }, statusLabel(video.status))),
+        /* Manage kuyrugundaki rozetin AYNISI (ui.js statusChip). Iki ekran
+           iki ayri rozet cizdigi icin renkler tutmuyordu. */
+        statusChip(video.status, statusLabel(video.status))),
       el('div.grow'),
       el('button.btn.ghost.sm', { onclick: () => showVideoInfo(video, summary) }, t('videoInfo')),
       el('button.btn.sm', { onclick: () => reSummarize(video) }, '⟲ ' + t('reSummarize'))),
@@ -119,6 +122,7 @@ export async function screenSingle(videoId) {
       el('div', { class: 'tiny', style: { marginTop: '10px' } },
         'The timeline and event list still work.')));
   }
+
   vwell.append(hud);
 
   // kontroller
@@ -263,7 +267,8 @@ export async function screenSingle(videoId) {
     onkeydown: e => { if (e.key === 'Enter') doSearch(); },
   });
   const searchState = el('div.searchstate', { style: { display: 'none' } });
-  const evBody = el('div.panel-b');
+  // Olaylar cizilene kadar iskelet: bos panel "bozuk" gorunuyordu.
+  const evBody = el('div.panel-b', {}, skeletonRows(6));
   const evPanel = el('div.panel', {},
     el('div.panel-h', {}, t('eventFlow'),
       el('span.grow'),
@@ -534,6 +539,7 @@ export async function screenSingle(videoId) {
     // Bayrak kapalıyken hiç sorma: kutu çizilmeyecekse veri de gerekmiyor.
     const det = FEATURES.bbox
       ? await api.detections(videoId, { from: 0, to: video.duration })
+          .catch(() => null)
       : null;
     /* Bu await sırasında kullanıcı başka bir ekrana geçmiş olabilir; o zaman
        DOM çoktan değişti ve aşağıdaki kurulum yok olmuş düğümlere yazıyor

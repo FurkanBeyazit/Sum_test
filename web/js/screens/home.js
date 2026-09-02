@@ -7,7 +7,8 @@
    ========================================================================== */
 
 import { el, mount, api, toast } from '../core.js';
-import { ROOT, topbar, treePanel, startPolling } from '../ui.js';
+import { ROOT, topbar, treePanel, startPolling, skeletonRows,
+} from '../ui.js';
 
 export async function screenHome() {
   const sidebar = el('div.sidebar', {},
@@ -58,8 +59,9 @@ export async function screenHome() {
 
   const health = el('div.panel', {},
     el('div.panel-h', {}, 'Server health'),
-    el('div.panel-b', { id: 'homehealth' },
-      el('div', { class: 'tiny muted' }, 'checking…')));
+    /* "checking…" yerine iskelet: metin yazi gibi okunuyor ve panel bos
+       duruyordu; paritildayan satirlar dolacagini soyluyor. */
+    el('div.panel-b', { id: 'homehealth' }, skeletonRows(5)));
 
   const brand = el('div', {
     style: {
@@ -92,15 +94,16 @@ export async function screenHome() {
     if (!box) return;
     let h;
     try { h = await api.health(); } catch { h = null; }
-    const dot = (ok) => el('span', {
-      style: {
-        width: '10px', height: '10px', borderRadius: '50%', flex: '0 0 auto',
-        background: ok ? '#22c55e' : '#ef4444',
-      },
-    });
+    /* Saglik satirlari da tek durum skalasini kullaniyor (app.css `.st`).
+       Burada ayri bir yesil/kirmizi nokta cizilmesi, ayni bilginin ekranin
+       her yerinde farkli gorunmesi demekti. Renk tek basina bilgi
+       tasimiyor: nokta + metin birlikte. */
     const line = (label, ok, note) => el('div.row', {
       style: { gap: '8px', padding: '3px 0' },
-    }, dot(ok), el('span', {}, label),
+    },
+      el('span', { class: 'st ' + (ok ? 'ok' : 'err') },
+        el('i'), ok ? 'up' : 'down'),
+      el('span.grow', {}, label),
       note ? el('span', { class: 'tiny muted' }, note) : null);
 
     if (!h) return mount(box, line('API server', false, 'unreachable'));

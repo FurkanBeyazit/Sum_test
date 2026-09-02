@@ -68,6 +68,51 @@ const STATUS_LABEL = {
   deleted: 'Deleted',
 };
 export const statusLabel = s => STATUS_LABEL[s] || s;
+
+/* ==========================================================================
+   Tek durum skalası
+   --------------------------------------------------------------------------
+   Aynı durum üç ekranda üç ayrı görünüyordu: Analysis başlığında `.badge`,
+   Manage kuyruğunda `.mg-pill`, ağaçta yalnız bir nokta. Renkler de
+   tutmuyordu — "analyzing" bir yerde sarı, bir yerde maviydi. Aşağıdaki
+   eşleme TEK kaynak: hem video_status hem job_status buradan geçiyor.
+
+   Beş ton var, daha fazlası ayırt edilemiyor:
+     ok   bitti · run  sürüyor · warn dikkat · err hata · idle henüz değil
+   ========================================================================= */
+const STATUS_TONE = {
+  completed: 'ok', analyzing: 'run', uploading: 'run', running: 'run',
+  ready: 'idle', registered: 'idle', queued: 'idle', canceled: 'idle',
+  deleted: 'idle', failed: 'err',
+};
+export const statusTone = (s) => STATUS_TONE[s] || 'idle';
+
+/**
+ * Durum rozeti. Renk tek başına bilgi taşımıyor: nokta + metin + ton
+ * birlikte, böylece renk ayrımı yapamayan bir operatör de okuyabiliyor.
+ * @param {string} status  video_status ya da job_status
+ * @param {string} [label] gösterilecek metin (varsayılan: İngilizce etiket)
+ */
+export function statusChip(status, label) {
+  return el('span', { class: 'st ' + statusTone(status), title: status },
+    el('i'), label || statusLabel(status));
+}
+
+/* ------------------------------------------------------------ iskelet ----
+   Veri gelene kadar konulan yer tutucu. Boş bir panel "bozuk", parıldayan
+   bir panel "geliyor" demek — tek eklemede en çok fark yaratan şey buydu.
+   Sayı gerçek sonuç sayısı olmak zorunda değil; ızgaranın dolu görünmesi
+   yeterli. */
+export function skeletonCards(n = 12) {
+  return Array.from({ length: n }, () => el('div.sk.card'));
+}
+export function skeletonRows(n = 4) {
+  return el('div', { style: { padding: '10px 12px' } },
+    Array.from({ length: n }, (_, i) => el('div.sk.row', {
+      // Satırlar birebir aynı uzunlukta olunca desen görünüyor, veri değil.
+      style: { width: [92, 78, 85, 70, 88][i % 5] + '%' },
+    })));
+}
 const SRC_ICON = { file: '▤', rtsp: '⦿', uploaded: '↑', archive: '▣' };
 
 /* ==========================================================================

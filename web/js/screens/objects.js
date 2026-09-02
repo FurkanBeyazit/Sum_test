@@ -38,11 +38,11 @@
    ========================================================================== */
 
 import {
-  el, mount, clear, api, t, hms, dur, toast,
+  FEATURES, el, mount, clear, api, t, hms, dur, toast,
 } from '../core.js';
 import { VideoOverlay } from '../overlay.js';
 import { Timeline } from '../timeline.js';
-import { ROOT, onLeave, topbar, treePanel } from '../ui.js';
+import { ROOT, onLeave, topbar, treePanel, skeletonCards } from '../ui.js';
 import { parChips, ageIcon, genderIcon } from '../parchip.js';
 
 /* Kullanıcının kişi işaretlemek için kullandığı palet. Izgara kenarlığı,
@@ -124,6 +124,10 @@ export async function screenObjects(videoId) {
   let objects = [];            // son arama sonucu
   let selected = null;         // tıklanan nesne (Info paneli + vurgu)
   let colorSeq = 0;
+  /* Kaç track tarandı — boş sonuçta bunu söylemek gerekiyor. "Hiçbir şey
+     bulunamadı" ile "318 track tarandı, hiçbiri eşleşmedi" farklı bilgiler:
+     ilki arayüzün bozuk olduğunu düşündürüyor. */
+  let lastScanned = 0;
   let TL = null, overlay = null, videoEl = null;
 
   /* ------------------------------------------------------------ oynatıcı -- */
@@ -293,7 +297,14 @@ export async function screenObjects(videoId) {
       el('div.op-sfoot', {}, btn));
 
     paintSel();
-    return { node, sel };
+    /* `reset` boş durumdaki "Clear the filter" düğmesi için: sınıf seçimi
+       kalıyor, yalnızca PAR süzgeçleri kalkıyor — kullanıcı "person"
+       aramaya devam etmek istiyor, aramayı baştan kurmak değil. */
+    return {
+      node,
+      sel,
+      reset() { for (const k of Object.keys(sel.par)) delete sel.par[k]; paintSel(); },
+    };
   }
 
   /* ============================================================ veri yükleme
@@ -310,8 +321,12 @@ export async function screenObjects(videoId) {
       else if (group === 'extra') par.push({ key: value, value });
       else par.push({ key: group, value });
     }
+    /* Istek uzun surebiliyor (500 track + kirpim yollari). Bos izgara
+       "bozuk" gorunuyordu; iskelet "geliyor" diyor. */
+    renderSkeleton();
     const r = await api.objects(videoId, { limit: 500, cls: sel.cls, par });
     objects = r.items || [];
+    lastScanned = r.returned || r.total || 0;
     totalLbl.textContent = par.length
       ? `${objects.length} match · ${r.returned} tracks scanned`
       : `${objects.length} ${sel.cls} · ${r.total} tracks total`;
@@ -334,11 +349,34 @@ export async function screenObjects(videoId) {
   }
 
   /* ------------------------------------------------------------- ızgara --- */
+  /** Veri gelene kadar parildayan yer tutucular. */
+  function renderSkeleton() {
+    clear(grid);
+    grid.append(...skeletonCards(12));
+  }
+
   function renderGrid() {
     clear(grid);
     if (!objects.length) {
+      /* Boş durum üç şeyi söylüyor: ne olduğu, NEDEN olduğu, oradan nasıl
+         çıkılacağı. Eskiden tek kelimeydi ("No objects") ve kullanıcı
+         süzgecin mi dar olduğunu yoksa analizin mi boş döndüğünü
+         bilemiyordu. */
+      const filtered = Object.keys(search.sel.par).length > 0;
       grid.append(el('div.empty', { style: { gridColumn: '1/-1' } },
-        el('span', { class: 'big' }, '⌕'), 'No objects'));
+        el('span', { class: 'big' }, '⌕'),
+        el('div', { class: 'ttl' },
+          filtered ? 'No match for these attributes' : 'No object in this video'),
+        el('div', { class: 'why' }, filtered
+          ? `${lastScanned} track scanned. PAR attributes are guesses — `
+            + 'narrowing two of them at once usually empties the list.'
+          : `The analysis found no ${search.sel.cls} track. Another class `
+            + 'may still have results.'),
+        filtered
+          ? el('button.btn.sm', {
+            onclick: () => { search.reset(); loadObjects(search.sel); },
+          }, 'Clear the filter')
+          : null));
       return;
     }
     for (const o of objects) {
@@ -569,12 +607,17 @@ export async function screenObjects(videoId) {
       }
       rows[r] = Math.max(rows[r], t1);
 
-      const color = marks.get(o.id) || CLASS_TINT[o.cls] || CLASS_TINT.other;
+      const mark = marks.get(o.id);
+      const color = mark || CLASS_TINT[o.cls] || CLASS_TINT.other;
       lanes[r].events.push({
         id: o.id,
         t_start: t0,
         t_end: t1,
         color,
+        /* Timeline bu bayraga bakip renklendirilmis seridi parlatiyor,
+           otekini soluk birakiyor. Renk vermenin tek amaci kalabalikta o
+           kisiyi bulmakti; hepsi ayni agirlikta cizilince amac kayboluyordu. */
+        marked: !!mark,
         type: marks.get(o.id) ? `#${o.track_id}` : '',
         description: `${o.label} · ${hms(t0)}`
           + (o.has_range ? ` – ${hms(o.t_last)}` : ''),
@@ -666,7 +709,12 @@ export async function screenObjects(videoId) {
       const o = objects.find((x) => x.track_id === tid);
       if (o) pickObject(o);
     };
-    const det = await api.detections(videoId, { from: 0, to: video.duration });
+    /* Bayrak kapalıyken hiç sorma. Uç hata verirse de ekran ayakta kalsın:
+       kutu çizilmemesi, sayfanın açılmamasından iyidir. */
+    const det = FEATURES.bbox
+      ? await api.detections(videoId, { from: 0, to: video.duration })
+          .catch(() => null)
+      : null;
     // Ekran bu await sırasında değişmiş olabilir — bkz. single.js'teki aynı guard
     if (!document.body.contains(vwell)) return;
     overlay.setDetections(det, { w: video.width, h: video.height });

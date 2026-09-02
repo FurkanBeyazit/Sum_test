@@ -42,6 +42,18 @@ export class VideoOverlay {
 
     this._onResize = () => this.resize();
     window.addEventListener('resize', this._onResize);
+    /* Canvas kutusu PENCERE boyutundan bagimsiz olarak da degisiyor: bilgi
+       paneli dolunca, timeline yerlesince, kaydirma cubugu belirince oynatici
+       daraliyor. O anda 'resize' olayi YOK, dolayisiyla arka plan tamponu eski
+       genislikte kaliyor; tarayici canvas'i yeni dar kutuya sikistiriyor ve
+       kutular merkeze dogru toplaniyor (dikeyde yukseklik degismedigi icin y
+       dogru kalir — hatanin imzasi buydu). ResizeObserver kutuyu dogrudan
+       izler. resize() yalnizca tamponu degistirir, yerlesimi degistirmez;
+       dongu olusmaz. */
+    if (window.ResizeObserver) {
+      this._ro = new ResizeObserver(() => this.resize());
+      this._ro.observe(this.cv);
+    }
     canvas.addEventListener('click', (e) => this._click(e));
     canvas.addEventListener('mousemove', (e) => this._hover(e));
     canvas.addEventListener('mouseleave', () => {
@@ -52,6 +64,7 @@ export class VideoOverlay {
 
   destroy() {
     window.removeEventListener('resize', this._onResize);
+    if (this._ro) this._ro.disconnect();
     if (this._raf) cancelAnimationFrame(this._raf);
     if (this._vfc && this.video && this.video.cancelVideoFrameCallback)
       this.video.cancelVideoFrameCallback(this._vfc);
@@ -206,13 +219,30 @@ export class VideoOverlay {
       this._boxesNow.push({ tid, cls, conf, px, py, pw, ph });
 
       const hot = this.highlightTrackId === tid;
-      const col = (this.colorOf && this.colorOf.get(tid)) || trackColor(tid);
+      /* KUTU HİYERARŞİSİ
+         Kalabalık bir karede on kutu aynı ağırlıkta çizilince hangisini
+         takip ettiğin kayboluyor. Üç kademe var:
+           seçili        → renkli, kalın, parlıyor, etiketli
+           renklendirilmiş → kendi rengi, normal kalınlık
+           geri kalan    → yarı saydam gri, köşe işareti yok, etiket yok
+         Üçüncü kademe yalnızca öne çıkan bir şey VARKEN devreye giriyor;
+         hiçbir şey seçilmemişse bütün kutular eşit, çünkü o zaman
+         hiyerarşi diye bir şey yok. */
+      const mark = this.colorOf && this.colorOf.get(tid);
+      const focusing = this.highlightTrackId !== null
+        || (this.colorOf && this.colorOf.size > 0);
+      const back = focusing && !hot && !mark;
+      const col = back ? '#8296ad' : (mark || trackColor(tid));
+
       c.save();
-      c.lineWidth = hot ? 2.5 : 1.6;
+      if (back) c.globalAlpha = .32;
+      c.lineWidth = hot ? 2.5 : (back ? 1.1 : 1.6);
       c.strokeStyle = col;
       if (hot) { c.shadowColor = col; c.shadowBlur = 12; }
       c.strokeRect(px, py, pw, ph);
       c.shadowBlur = 0;
+      // Arka plandaki kutular sade dikdörtgen: köşe işareti dikkat çekiyor.
+      if (back) { c.restore(); continue; }
 
       // köşe işaretleri — CCTV analiz görünümü
       const k = Math.min(11, pw * .3, ph * .3);

@@ -17,12 +17,27 @@ export const FEATURES = {
      uçlarını verdi — açık. */
   objects: true,
 
-  /* Video üstü kutu katmanı. BBox ucu var ama grup kapsamlı, duvar saatiyle
-     sorgulanıyor ve msgpack dönüyor:
-       GET /playback/groups/{gid}/bboxes?start_at=&end_at=&format=msgpack
-     JSON çıktısı doğrulanınca `backend.js` içindeki detections() tamamlanıp
-     bu bayrak açılacak. */
+  /* Video üstü kutu katmanı — ŞİMDİLİK KAPALI, ama kod ÇALIŞIR durumda.
+       GET /playback/groups/{gid}/bboxes?start_at=&end_at=&format=json
+     Uç grup kapsamlı ve duvar saatiyle sorgulanıyor; ikisini de backend.js
+     içindeki detections() çeviriyor ve hizalama doğrulandı.
+     Kapalı olmasının tek sebebi maliyet: 30 fps'te 60 saniyelik pencere
+     ~22 000 kutu / ~6 MB. Kayan pencere (playhead'i takip eden 20-30 sn)
+     yazılmadan açmak uzun kayıtlarda belleği şişirir.
+     Açmak için: `bbox: true` — başka hiçbir yere dokunmaya gerek yok. */
   bbox: false,
+
+  /* BİRLEŞTİRME AÇIK. Bu ekip her zaman birden çok parça yükleyip tek bir
+     kayıt elde ediyor; ayrı ayrı yüklemek diye bir kullanım yok. Kip
+     kapatılırsa ham dosya backend'e olduğu gibi gider — AVI yüklendiğinde
+     backend'de de AVI durur ve hiçbir tarayıcıda oynatılamaz. ffmpeg
+     çıktısı her zaman MP4 olduğu için oynatılabilirlik bu hattan geliyor. */
+  merge: true,
+
+  /* Onay kutusu GİZLİ — özellik değil, yalnızca anahtarı. Müşteri demoda
+     seçenek görmek istemedi; kip zaten hep açık kalacağı için kutunun bir
+     işlevi de yoktu. Geri getirmek için: `mergeToggle: true`. */
+  mergeToggle: false,
 
   /* Re-ID: analiz hattında SOLIDER yok, embedding üretilmiyor. */
   reid: false,

@@ -59,7 +59,33 @@ async function req(path, opts = {}) {
 
 const cache = { proxy: null, videos: null, results: new Map(),
                 streams: new Map(), par: new Map(),
-                tracks: new Map() };
+                tracks: new Map(), bbox: new Map() };
+
+/* BBox penceresi (saniye). Uc grup kapsamli ve cok veri donuyor: 64 saniye
+   ~6.4 MB. Tek istekte cekilecek en uzun aralik bu. */
+const BBOX_WINDOW = 60;
+
+/**
+ * Ornekleme frekansini VERININ KENDISINDEN cikarir.
+ *
+ * overlay.js kutulari `Math.round(t * fps)` kovasina koyuyor ve oynatma
+ * sirasinda ayni formulle ariyor. fps veriye uymazsa kovalar kaymaya baslar
+ * ve kutular yanip soner. Bu yuzden ardisik ornek zamanlari arasindaki
+ * ORTANCA farki alip tersini kullaniyoruz — kovalar verinin oz izgarasina
+ * oturur.
+ */
+function sampleFps(times, fallback) {
+  const ts = [...times].sort((a, b) => a - b);
+  const d = [];
+  for (let i = 1; i < ts.length; i++) {
+    const dt = ts[i] - ts[i - 1];
+    if (dt > 1e-4) d.push(dt);
+  }
+  if (!d.length) return fallback || 10;
+  d.sort((a, b) => a - b);
+  const med = d[Math.floor(d.length / 2)];
+  return Math.min(60, Math.max(1, 1 / med));
+}
 
 /** proxy_cache.py'nin ürettiği index — hangi videonun yerel proxy'si var */
 async function proxyIndex() {
@@ -876,55 +902,78 @@ export const backendApi = {
     return { total: items.length, items };
   },
 
-  // --- veri kaynağı olmayanlar (backend endpoint'i bekliyor) ---------------
-  /* BBox ucu var ama GRUP ve duvar saati kapsamli, ustelik msgpack:
-       GET /playback/groups/{gid}/bboxes?start_at=&end_at=&format=msgpack
-     Overlay ise video basina, saniye cinsinden, JSON bekliyor. `format=json`
-     destekleniyorsa cevirebiliriz; desteklenmiyorsa msgpack cozucu gerekir ve
-     onu harici kutuphane olmadan yazmak ayri bir is. Simdilik JSON deneniyor,
-     olmazsa bos donuyor — kutular cizilmiyor, ekranin geri kalani calisiyor. */
+  // --- kutu katmani (playback grubu) --------------------------------------
   /**
    * Video üstü kutular — `GET /playback/groups/{gid}/bboxes`.
    *
-   * Uç 2026-09-01'de `format=json` desteklemeye başladı (önce yalnızca
-   * msgpack vardı ve `FEATURES.bbox` bu yüzden kapalıydı).
-   *
-   * ÜÇ TUHAFLIK
-   * -----------
-   * 1. GRUP KAPSAMLI. Cevap grubun BÜTÜN videolarının karelerini taşıyor;
-   *    `video_id` ile kendi videomuzu ayıklıyoruz.
-   * 2. DUVAR SAATİYLE sorgulanıyor, video saniyesiyle değil. Pencereyi
-   *    `start_at = video.start_time + from` diye kuruyoruz; cevaptaki
-   *    `time_seconds` de o `start_at`e göreli, yani `from` ekleyince video
-   *    saniyesi oluyor.
-   * 3. BÜYÜK. 64 saniyelik pencere 6.4 MB / 23 555 kutu. Beş dakikalık bir
-   *    kayıt tek istekte ~30 MB eder — o yüzden pencere pencere çekiliyor
-   *    ve her pencere önbelleğe giriyor.
-   *
-   * @param {object} o  {from, to} — video saniyesi
-   * @returns {{fps:number, coord:string, rows:Array}} overlay.js kablo biçimi:
-   *          [t, track_id, class_id, conf, x1, y1, x2, y2] — hepsi normalize
-   */
-  /**
-   * Video üstü kutular — ŞU AN KAPALI (`FEATURES.bbox`).
-   *
-   * Burada bir zamanlar ucun şemasını görmek için gerçek bir istek atılıyordu:
-   * cevabı konsola yazıp boş dönüyordu. Uç `format=json` desteklemeye
-   * başlayınca o yoklama ÇOK pahalı hâle geldi — üç dakikalık bir kayıt için
-   * 19.6 MB indirip çöpe atıyordu, hem de her ekran açılışında.
-   *
-   * Şema artık biliniyor (aşağıda). Bayrak açılana kadar hiç istek yok.
+   * Uç `format=json` destekliyor, o yüzden msgpack çözücüsüne gerek yok.
    *
    *   GET /playback/groups/{gid}/bboxes?start_at=&end_at=&format=json
    *   → { frames: [{ video_id, frame_index, frame_time,
    *                  bboxes: [{ track_id, class_id, confidence,
    *                             x1, y1, x2, y2, time_seconds }] }] }
    *
-   * Açarken dikkat: uç GRUP kapsamlı (kendi videomuzu `video_id` ile
-   * ayıklamak gerek), duvar saatiyle sorgulanıyor ve cevap büyük — pencere
-   * pencere çekilmeli.
+   * ÜÇ TUHAFLIK — üçü de burada çözülüyor, çağıran taraf hiçbirini bilmiyor:
+   *
+   * 1. GRUP KAPSAMLI. Cevap grubun BÜTÜN videolarının karelerini taşıyor;
+   *    `frame.video_id` ile kendi videomuzu ayıklıyoruz.
+   * 2. DUVAR SAATİ. Video saniyesiyle değil ISO zaman damgasıyla sorgulanıyor.
+   *    Pencereyi `start_at = video.start_time + from` diye kuruyoruz;
+   *    cevaptaki `time_seconds` de o `start_at`e göreli olduğu için `from`
+   *    eklenince video saniyesine dönüyor.
+   * 3. BÜYÜK. 64 saniyelik pencere ≈ 6.4 MB / 23 500 kutu. Bütün videoyu tek
+   *    istekte çekmek onlarca MB eder, o yüzden PENCERE saniyeyle sınırlı ve
+   *    sonuç önbelleğe giriyor.
+   *
+   * İLK ADIM: yalnızca TEK pencere çekiliyor (`BBOX_WINDOW`). Yani kutular
+   * videonun ilk dakikasında görünür, sonrasında görünmez — bu kasıtlı.
+   * Hizalama ve renk eşleşmesi doğrulanınca kayan pencereye geçilecek.
+   *
+   * @param {string|number} videoId
+   * @param {object} o  {from, to} — video saniyesi
+   * @returns {{fps:number, coord:string, rows:Array}} overlay.js kablo biçimi:
+   *          [t, track_id, class_id, conf, x1, y1, x2, y2] — hepsi normalize
    */
-  detections: async () => ({ fps: 0, coord: 'xywh_norm', rows: [] }),
+  detections: async (videoId, o = {}) => {
+    const empty = { fps: 0, coord: 'xyxy_norm', rows: [] };
+    const v = await videoById(videoId);
+    /* Grup ya da başlangıç saati yoksa uç sorgulanamaz — sessizce boş dön,
+       ekranın geri kalanı kutusuz çalışsın. */
+    if (!v || v.group_id == null || !v.start_time) return empty;
+
+    const from = Math.max(0, o.from || 0);
+    const to = Math.min(o.to ?? from + BBOX_WINDOW, from + BBOX_WINDOW);
+    if (to <= from) return empty;
+
+    const startAt = isoPlus(v.start_time, from);
+    const endAt = isoPlus(v.start_time, to);
+    if (!startAt || !endAt) return empty;
+
+    const key = `${v.group_id}|${startAt}|${endAt}|${videoId}`;
+    if (cache.bbox.has(key)) return cache.bbox.get(key);
+
+    const p = (async () => {
+      const q = `start_at=${encodeURIComponent(startAt)}`
+        + `&end_at=${encodeURIComponent(endAt)}&format=json`;
+      const r = await req(`/playback/groups/${v.group_id}/bboxes?${q}`);
+
+      const rows = [];
+      const times = new Set();
+      for (const f of (r && r.frames) || []) {
+        if (String(f.video_id) !== String(videoId)) continue;   // (1) ayıkla
+        for (const b of f.bboxes || []) {
+          const t = from + (b.time_seconds ?? f.frame_time ?? 0);   // (2)
+          times.add(t);
+          rows.push([t, b.track_id, b.class_id, b.confidence ?? 1,
+                     b.x1, b.y1, b.x2, b.y2]);
+        }
+      }
+      return { fps: sampleFps(times, v.fps), coord: 'xyxy_norm', rows };
+    })();
+
+    cache.bbox.set(key, p);
+    try { return await p; } catch (e) { cache.bbox.delete(key); throw e; }
+  },
 
   /** Object Page — `/tracks`, sunucu tarafinda PAR filtresiyle. */
   /**
