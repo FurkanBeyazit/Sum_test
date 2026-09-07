@@ -59,10 +59,19 @@ async function req(path, opts = {}) {
 
 const cache = { proxy: null, videos: null, results: new Map(),
                 streams: new Map(), par: new Map(),
-                tracks: new Map(), bbox: new Map() };
+                tracks: new Map(), bbox: new Map(),
+                /* video_id → Map(track_id → class_id). Tek track ayrıntısı
+                   sınıf döndürmüyor; liste ucu döndürüyor. Video başına bir
+                   kez çekip burada tutuyoruz. */
+                classes: new Map() };
 
-/* BBox penceresi (saniye). Uc grup kapsamli ve cok veri donuyor: 64 saniye
-   ~6.4 MB. Tek istekte cekilecek en uzun aralik bu. */
+/* BBox penceresi (saniye) — tek istekte cekilebilecek en uzun aralik.
+   Iki ayri tavan bunu dusuk tutmayi gerektiriyor:
+     - BOYUT: 30 fps'te saniyede ~370 kutu / ~100 KB.
+     - SUNUCU: 300 saniyelik pencere denendiginde cevap yaklasik ilk dakikada
+       kesiliyor (~1900 kare). Yani genis pencere istemek sadece yavas degil,
+       sessizce VERI KAYBETTIRIYOR — kalan sure bos gelir.
+   Gercek pencereleme bboxfeed.js'te ve 20 saniye; burasi yalnizca ust sinir. */
 const BBOX_WINDOW = 60;
 
 /**
@@ -85,6 +94,37 @@ function sampleFps(times, fallback) {
   d.sort((a, b) => a - b);
   const med = d[Math.floor(d.length / 2)];
   return Math.min(60, Math.max(1, 1 / med));
+}
+
+/**
+ * Bir videodaki track'lerin sınıf tablosu.
+ *
+ * `GET /analysis/result/{id}/track/{tid}` sınıf DÖNDÜRMÜYOR; yalnızca liste
+ * ucu döndürüyor. Re-ID akışı ise sadece `{video_id, track_id}` veriyor, yani
+ * "bu aday kişi mi araç mı" sorusunun cevabı hiçbir yerden gelmiyordu ve
+ * bütün adaylar sınıfsız kalıyordu.
+ *
+ * Track başına ayrı istek yerine video başına TEK istek: liste zaten hepsini
+ * veriyor ve sonuç önbellekte kalıyor.
+ */
+async function classIndex(videoId) {
+  const key = String(videoId);
+  if (cache.classes.has(key)) return cache.classes.get(key);
+  const m = new Map();
+  try {
+    const q = new URLSearchParams({
+      limit: '1000', offset: '0',
+      par_min_score: '0', par_active_only: 'false',
+    });
+    const raw = await req(`/analysis/result/${videoId}/tracks?${q}`);
+    for (const r of (Array.isArray(raw) ? raw : (raw.items || []))) {
+      const cid = r.class_id ?? (Array.isArray(r.class_ids) ? r.class_ids[0]
+        : undefined);
+      if (cid != null) m.set(String(r.track_id), cid);
+    }
+  } catch { /* sınıf bilinmiyor kalır — eleme de yapılmaz */ }
+  cache.classes.set(key, m);
+  return m;
 }
 
 /** proxy_cache.py'nin ürettiği index — hangi videonun yerel proxy'si var */
@@ -408,35 +448,33 @@ function toRun(j) {
    Eski birim: aynı alan daha önce 1/30000 zaman tabanındaydı (kare başına
    1001 birim). Karışıklık çıkmasın diye dönüştürücü ikisini de tanıyor.     */
 
-/* Sınıf kimlikleri COCO'nun kendisi DEĞİL.
-   Uç `class_name` vermediği için sayıyı adlandırmak bize kalıyordu ve tablo
-   COCO varsayılanından kopyalanmıştı. 2026-08-31'de görüldü ki 1 ve 2 ters:
-   araba ikonuna basınca bisiklet, bisiklete basınca araba geliyordu. Model
-   kendi sınıf sırasını kullanıyor — 1 car, 2 bicycle. Geri kalan kimlikler
-   doğrulanmadı; ekranda görülmeyen bir sınıf çıkarsa `[backend] sınıf
-   dağılımı` günlüğüne bakıp buradan düzeltilir. Uç `class_name` alanını
-   eklediğinde bu tablo tamamen kalkacak. */
-const COCO = {
-  0: 'person', 1: 'car', 2: 'bicycle', 3: 'motorcycle', 4: 'airplane',
-  5: 'bus', 6: 'train', 7: 'truck', 8: 'boat', 9: 'traffic light',
-  10: 'fire hydrant', 11: 'stop sign', 12: 'parking meter', 13: 'bench',
-  14: 'bird', 15: 'cat', 16: 'dog', 17: 'horse', 18: 'sheep', 19: 'cow',
-  24: 'backpack', 25: 'umbrella', 26: 'handbag', 28: 'suitcase',
-  39: 'bottle', 41: 'cup', 56: 'chair', 60: 'dining table',
-  62: 'tv', 63: 'laptop', 67: 'cell phone',
+/* ==========================================================================
+   Modelin sınıf tablosu
+   --------------------------------------------------------------------------
+   Backend'in `_DEFAULT_NAME_TO_ID` sözlüğünün birebir tersi (2026-09-04'te
+   alındı). COCO DEĞİL — yalnızca 0 ve 1 rastlantı eseri örtüşüyor.
+
+   Buraya kadarki tablo COCO varsayılanından kopyalanmıştı ve 2'den sonraki
+   HER kimliği yanlış adlandırıyordu. Etkisi göründüğünden büyük: 5/6/7
+   "bus / train / truck" sanılıyordu, oysa gerçekte bicycle / motorcycle /
+   boar. Ekranda saçma "otobüs" kayıtları çıkınca bunlar hatalı yakalama
+   sayılmış ve süzgeç gruplarından ÇIKARILMIŞTI — yani model doğru iş
+   yapıyordu, biz yanlış okuyorduk. Gruplar bu yüzden aşağıda yeniden açıldı.
+
+   Uç bir gün `class_name` göndermeye başlarsa bu tablo tamamen kalkabilir.
+   ========================================================================== */
+export const CLASS_NAME = {
+  0: 'person', 1: 'car', 2: 'falldown', 3: 'bus', 4: 'truck',
+  5: 'bicycle', 6: 'motorcycle', 7: 'boar', 8: 'tractor', 9: 'scooter',
+  10: 'tiller', 11: 'cat', 12: 'dog',
 };
 
-/* Arayüzün sınıf grupları — filtre paneli ve ızgara bunları kullanıyor.
-   DAR TUTULUYOR. Önce yakın sınıflar aynı gruba konmuştu (bus/truck/train →
-   araç, motorsiklet → bisiklet); pratikte o kayıtların neredeyse tamamı yanlış
-   yakalamaydı ve doğru sonuçların arasını dolduruyordu. Gruba yalnızca
-   modelin güvenilir çıkardığı sınıf giriyor; ötekiler 'other' olup hiçbir
-   süzgece düşmüyor — kayıt duruyor, sadece görünmüyor. */
-const CLASS_GROUP = {
-  person: 'person',
-  bicycle: 'bicycle',
-  car: 'vehicle',
-};
+/* GRUPLAMA YOK. Bir dönem sınıflar kovalara toplanıyordu (car+bus+truck →
+   "vehicle"); tek kazancı süzgeci kısaltmaktı, bedeli ekranda modelin
+   söylemediği bir ad görmekti. Artık `cls` sınıf adının ta kendisi:
+   "car" olan "car" görünüyor. Süzgeç hangi adları göstereceğine kendi karar
+   veriyor (bkz. screens/objects.js CLASSES) — listede olmayan sınıfın kaydı
+   yine duruyor, yalnızca o düğmeye basılarak aranamıyor.        */
 
 /**
  * Zaman damgası → saniye.
@@ -492,7 +530,15 @@ function toTrackObject(r, videoId, durSec) {
     console.info('[backend] ham track kaydı:', r);
   }
   const tid = r.track_id;
-  const name = COCO[r.class_id] || `class ${r.class_id}`;
+  /* SINIF HER CEVAPTA GELMİYOR. Liste ucu `class_id` veriyor, tek track
+     ayrıntısı vermiyor — `fillLifecycles` bu yüzden dışarıdan enjekte
+     ediyor. `class_ids` dizisi bazı cevaplarda var, ilk elemanı aynı bilgi.
+     Hiçbiri yoksa sınıf BİLİNMİYOR demektir; "other" demek yanlış olur,
+     çünkü ona bakıp eleme yapan kod var (Re-ID aday süzgeci). */
+  const cid = r.class_id ?? (Array.isArray(r.class_ids) ? r.class_ids[0]
+    : undefined);
+  const known = cid != null;
+  const name = known ? (CLASS_NAME[cid] || `class ${cid}`) : 'unknown';
   const snap = r.snapshot || {};
   const par = r.par || {};
   const lc = r.lifecycle || null;
@@ -520,9 +566,11 @@ function toTrackObject(r, videoId, durSec) {
     id: `V${videoId}-T${tid}`,
     track_id: tid,
     video_id: String(videoId),
-    class_id: r.class_id,
+    class_id: cid ?? null,
     class_name: name,
-    cls: CLASS_GROUP[name] || 'other',
+    cls: known ? name : null,
+    /* Süzgeç yazanlar için: `cls === null` "bilmiyoruz" demek, "other" değil. */
+    class_known: known,
     crop: `${LIVE}/analysis/result/${videoId}/track/${tid}/crop`,
     /* Şerit `lifecycle`ten; yoksa bestshot anında tek işaret. */
     t_first: hasRange ? t0 : (shot ?? 0),
@@ -537,7 +585,7 @@ function toTrackObject(r, videoId, durSec) {
     par_model: par.model_name || null,
     par_list: flat,          // [{key, value}] — süzme bunun üstünde
     attrs: map,              // { gender: 'Female', lower: 'Black', … }
-    label: `#${tid} ${name}`,
+    label: known ? `#${tid} ${name}` : `#${tid}`,
     event_count: (r.event || {}).count ?? (r.events || []).length,
   };
 }
@@ -854,6 +902,27 @@ export const backendApi = {
     return { ...v, summary: buildSummary(v, r) };
   },
 
+  /**
+   * Bir videonun AYNI GRUPTAKİ kardeşleri, duvar saatine göre sıralı.
+   *
+   * Çok parçalı kayıt için: bir kameradan sabah / öğlen / akşam üç ayrı
+   * dosya yüklendiğinde üçü de aynı `group_id` altında ayrı birer video
+   * olarak duruyor. Zaman çizgisi ve oynatıcı bu listeden `GroupClock`
+   * kuruyor (bkz. groupclock.js).
+   *
+   * Grubu olmayan video kendi başına tek elemanlı bir liste — çağıran taraf
+   * "grup var mı" diye ayrı bir kontrol yazmasın diye.
+   */
+  groupParts: async (id) => {
+    const v = await videoById(id);
+    if (!v) return [];
+    if (v.group_id == null) return [v];
+    const all = await allVideos();
+    return all
+      .filter((x) => x.group_id === v.group_id)
+      .sort((a, b) => Date.parse(a.start_time || 0) - Date.parse(b.start_time || 0));
+  },
+
   summary: async (id) => {
     const v = await videoById(id);
     return buildSummary(v, await resultOf(id));
@@ -917,17 +986,18 @@ export const backendApi = {
    *
    * 1. GRUP KAPSAMLI. Cevap grubun BÜTÜN videolarının karelerini taşıyor;
    *    `frame.video_id` ile kendi videomuzu ayıklıyoruz.
-   * 2. DUVAR SAATİ. Video saniyesiyle değil ISO zaman damgasıyla sorgulanıyor.
-   *    Pencereyi `start_at = video.start_time + from` diye kuruyoruz;
-   *    cevaptaki `time_seconds` de o `start_at`e göreli olduğu için `from`
-   *    eklenince video saniyesine dönüyor.
+   * 2. DUVAR SAATİ — YALNIZCA SORGUDA. Pencereyi ISO damgasıyla istiyoruz
+   *    (`start_at = video.start_time + from`), ama cevaptaki `time_seconds`
+   *    `start_at`e göreli DEĞİL: videonun kendi başlangıcına göreli, yani
+   *    zaten aradığımız video saniyesi. Üstüne `from` eklemek her pencereyi
+   *    kendi genişliği kadar ileri kaydırır — 20-40 penceresi 40-60'a düşer,
+   *    28. saniyedeki kişi 48'de görünür. Hiçbir şey EKLEME.
    * 3. BÜYÜK. 64 saniyelik pencere ≈ 6.4 MB / 23 500 kutu. Bütün videoyu tek
    *    istekte çekmek onlarca MB eder, o yüzden PENCERE saniyeyle sınırlı ve
    *    sonuç önbelleğe giriyor.
    *
-   * İLK ADIM: yalnızca TEK pencere çekiliyor (`BBOX_WINDOW`). Yani kutular
-   * videonun ilk dakikasında görünür, sonrasında görünmez — bu kasıtlı.
-   * Hizalama ve renk eşleşmesi doğrulanınca kayan pencereye geçilecek.
+   * Bu işlev TEK pencere getirir ve `BBOX_WINDOW` ile sınırlıdır. Videonun
+   * tamamını kapsayan kayan pencere `bboxfeed.js` içinde.
    *
    * @param {string|number} videoId
    * @param {object} o  {from, to} — video saniyesi
@@ -962,7 +1032,8 @@ export const backendApi = {
       for (const f of (r && r.frames) || []) {
         if (String(f.video_id) !== String(videoId)) continue;   // (1) ayıkla
         for (const b of f.bboxes || []) {
-          const t = from + (b.time_seconds ?? f.frame_time ?? 0);   // (2)
+          const t = b.time_seconds;                                 // (2)
+          if (t == null) continue;
           times.add(t);
           rows.push([t, b.track_id, b.class_id, b.confidence ?? 1,
                      b.x1, b.y1, b.x2, b.y2]);
@@ -975,16 +1046,6 @@ export const backendApi = {
     try { return await p; } catch (e) { cache.bbox.delete(key); throw e; }
   },
 
-  /** Object Page — `/tracks`, sunucu tarafinda PAR filtresiyle. */
-  /**
-   * Object Page — `/tracks`.
-   *
-   * Uç SINIFA GÖRE FİLTRELEMİYOR (yalnızca PAR parametreleri var), bu yüzden
-   * sınıf süzgeci istemcide uygulanıyor: kullanıcı "kişi" seçtiğinde listede
-   * araba çıkmasının sebebi buydu. Sunucu `class_id` parametresi eklerse
-   * `limit` doğru çalışır ve bu süzgeç kalkar — şu an sayfa başına 100 kayıt
-   * geliyor, sınıf süzgeci sonrasında daha azı görünüyor.
-   */
   /**
    * Object Page — `/tracks`.
    *
@@ -1052,10 +1113,285 @@ export const backendApi = {
     return cache.tracks.get(key);
   },
 
+  /**
+   * Tek track'i tam nesne olarak getirir.
+   *
+   * Re-ID akışı yalnızca `{group_id, video_id, track_id}` gönderiyor —
+   * ekranda bir şerit çizmek için aralık, kırpım ve sınıf gerekiyor. Liste
+   * ucunu (500 track) çekmek yerine tek kaydın ayrıntısını alıyoruz;
+   * `cache.tracks` sayesinde aynı aday ikinci kez gelirse istek yok.
+   */
+  trackObject: async (videoId, trackId) => {
+    const key = `${videoId}:${trackId}`;
+    let d = cache.tracks.get(key);
+    if (d === undefined) {
+      try { d = await req(`/analysis/result/${videoId}/track/${trackId}`); }
+      catch { d = null; }
+      cache.tracks.set(key, d);
+    }
+    if (!d) return null;
+    const v = await videoById(videoId);
+    /* Sınıf ayrıntıda yok — liste ucundan gelen tablodan tamamlıyoruz. */
+    const cid = d.class_id ?? (Array.isArray(d.class_ids) ? d.class_ids[0]
+      : (await classIndex(videoId)).get(String(trackId)));
+    return toTrackObject(
+      cid != null ? { ...d, class_id: cid } : d, videoId, v ? v.duration : 0);
+  },
+
+  /* ======================================================== Re-ID akışı ====
+     GET /analysis/result/groups/{gid}/video/{vid}/track/{tid}/reid/stream
+
+     Grup içindeki DIĞER track'leri hedefle karşılaştırıp eşleşme sırasını
+     SSE ile gönderiyor. Karşılaştırma hedefin merkez zamanına yakınlıktan
+     başlıyor, yani ilk gelenler zaman olarak en yakın adaylar.
+
+     NEDEN EventSource DEĞİL
+     -----------------------
+     Sunucu satır sonlarını GERÇEK yeni satır olarak değil, iki karakterlik
+     kaçış dizisi olarak yazıyor. "curl … | cat -A" çıktısında tek bir $ yok;
+     bütün gövde tek satır: dolgu yorumu, sonra metin olarak ters bölü + n,
+     sonra "event: ranking", yine ters bölü + n, "data: []".
+
+     SSE'de satır sonu protokolün KENDİSİ: tarayıcı böyle bir gövdeyi ":" ile
+     başlayan tek bir yorum satırı sayar ve hiçbir olay tetiklenmez.
+     EventSource bundan hiçbir şey çıkaramaz, araya girecek yer de bırakmaz.
+
+     Bu yüzden gövdeyi fetch ile kendimiz okuyup çözümlüyoruz. İki yan kazanç:
+       (1) sunucu düzeltilince aynı kod değişmeden gerçek satır sonlarıyla da
+           çalışıyor — çeviri kendini kapatıyor,
+       (2) EventSource'un akış bitince KENDİLİĞİNDEN yeniden bağlanması yok;
+           o davranış bütün eşleştirmeyi baştan başlatıyordu.
+
+     YÜKÜN BİÇİMİ
+     ------------
+     Gözlenen: "event: ranking" + "data: [...]" — düz bir dizi, elemanları
+     tam olarak {group_id, video_id, track_id}. SKOR ALANI YOK: elimizdeki
+     tek sinyal sıradaki konum. `normMatch` yine de bilinen skor adlarını
+     arıyor, sunucu bir gün eklerse kendiliğinden görünür (`onRanking`
+     tüketicisi null skoru zaten atlıyor).
+
+     HER OLAY TAM SIRALAMA
+     ---------------------
+     Gözlem (grup 30 / video 57 / track 9): olaylar artımlı DEĞİL, her biri o
+     ana kadarki bütün sıralamanın yeniden dizilmiş hâli. Liste hem büyüyor
+     hem SIRA DEĞİŞTİRİYOR — 16 numara en son beliriyor ve doğrudan listenin
+     başına geçiyor.
+
+     Bu yüzden "ilk görülen birinci sıradır" varsayımı yanlış: sıra ancak SON
+     olayda doğru. Her olayda bütün sıralamayı olduğu gibi yukarı veriyoruz,
+     rütbe de o listedeki konumdan geliyor. Çağıran taraf farkı kendisi alıyor
+     (yeni gelenleri çözüyor, eskilerin rütbesini güncelliyor).
+  */
+  reidStream(groupId, videoId, trackId, cb = {}) {
+    const url = `${LIVE}/analysis/result/groups/${groupId}`
+      + `/video/${videoId}/track/${trackId}/reid/stream`;
+    const ctrl = new AbortController();
+    /* NL: gerçek satır sonu (tek karakter). ESC: sunucunun yazdığı
+       İKİ karakterlik kaçış dizisi — ters bölü ve n. */
+    const NL = '\n';
+    const ESC = '\\n';
+    let got = 0;
+    let closed = false;
+    let idleTimer = null;
+
+    const stop = (why) => {
+      if (closed) return;
+      closed = true;
+      clearTimeout(idleTimer);
+      try { ctrl.abort(); } catch { /* zaten kapanmış */ }
+      if (cb.onDone) cb.onDone(why, got);
+    };
+
+    /* AKIŞ HİÇ BİTMİYOR. Sunucu bitiş olayı göndermiyor ve sıralama
+       dolduktan sonra da aynı listeyi tekrar tekrar yollamaya devam ediyor —
+       bağlantı kendiliğinden kapanmıyor.
+
+       Bu yüzden BİZ kapatıyoruz: sıralama belli bir süre DEĞİŞMEZSE iş
+       bitmiştir. Ölçüt "olay gelmedi" değil "sıralama değişmedi"; aynı liste
+       saniyede bir tekrar gelirse zamanlayıcı hiç dolmaz ve bağlantı sonsuza
+       kadar açık kalırdı. Kullanıcı hedefe yeniden tıklayarak sürdürebilir. */
+    const IDLE_MS = 12000;
+    let lastSig = null;
+    const touch = () => {
+      clearTimeout(idleTimer);
+      if (closed) return;
+      idleTimer = setTimeout(() => stop('idle'), IDLE_MS);
+    };
+
+    const pickList = (d) => {
+      if (Array.isArray(d)) return d;
+      if (!d || typeof d !== 'object') return [];
+      for (const k of ['matches', 'items', 'results', 'ranking', 'candidates',
+                       'data', 'tracks']) {
+        if (Array.isArray(d[k])) return d[k];
+      }
+      return [];
+    };
+
+    const normMatch = (m) => {
+      if (!m || typeof m !== 'object') return null;
+      const vid = m.video_id ?? m.videoId;
+      const tid = m.track_id ?? m.trackId;
+      if (vid == null || tid == null) return null;
+      const score = m.score ?? m.similarity ?? m.match_score ?? m.sim
+        ?? (m.distance != null ? 1 - m.distance : null);
+      return {
+        videoId: String(vid),
+        trackId: Number(tid),
+        groupId: m.group_id ?? m.groupId ?? groupId,
+        score: typeof score === 'number' ? score : null,
+      };
+    };
+
+    let logged = false;
+
+    /** Tek bir SSE çerçevesi: "event: x" ve "data: y" satırları. */
+    const frame = (text) => {
+      let name = 'message';
+      const data = [];
+      for (const line of text.split(NL)) {
+        if (!line || line[0] === ':') continue;      // yorum / dolgu
+        const c = line.indexOf(':');
+        const k = c < 0 ? line : line.slice(0, c);
+        const v = c < 0 ? '' : line.slice(c + 1).replace(/^ /, '');
+        if (k === 'event') name = v;
+        else if (k === 'data') data.push(v);
+      }
+      const body = data.join(NL);
+      if (/^(done|end|complete|close)$/i.test(name)) return stop('done');
+      if (!body) return;
+      /* Gövdesi OLAN ilk çerçeveyi yaz. Akışın başındaki dolgu yorumu da bir
+         çerçeve sayılıyor ama içinde veri yok; onu yazmak "ilk olay boş
+         geldi" gibi okunurdu. */
+      if (!logged) {
+        logged = true;
+        console.info('[reid] ilk olay:', { event: name, data: body });
+      }
+
+      let d;
+      try { d = JSON.parse(body); } catch { return; }
+
+      /* Gövde sonuç listesi değil de durum bildirimiyse akış bitmiştir. */
+      const st = d && !Array.isArray(d) && (d.status || d.event || d.state);
+      const list = pickList(d);
+      if (!list.length && typeof st === 'string'
+          && /done|end|complete|finish/i.test(st)) return stop('done');
+
+      /* Sıralamayı OLDUĞU GİBİ aktar: rütbe listedeki konum. Aynı aday iki
+         kez geçerse ilk konumu geçerli. */
+      const rank = [];
+      const dedupe = new Set();
+      for (const raw of list) {
+        const m = normMatch(raw);
+        if (!m) continue;
+        /* Hedefin kendisi listede olabilir — kendine eşleşme bilgi değil. */
+        if (String(m.videoId) === String(videoId)
+            && Number(m.trackId) === Number(trackId)) continue;
+        const key = `${m.videoId}:${m.trackId}`;
+        if (dedupe.has(key)) continue;
+        dedupe.add(key);
+        m.key = key;
+        m.rank = rank.length + 1;
+        rank.push(m);
+        if (cb.limit && rank.length >= cb.limit) break;
+      }
+      /* Aynı sıralama tekrar geldiyse haber değil: ne çizim tazelemeye ne de
+         zamanlayıcıyı sıfırlamaya değer. */
+      const sig = rank.map((m) => m.key).join(',');
+      if (sig === lastSig) return;
+      lastSig = sig;
+      touch();
+
+      got = rank.length;
+      if (cb.onRanking) cb.onRanking(rank);
+      if (cb.limit && got >= cb.limit) stop('limit');
+    };
+
+    (async () => {
+      let r;
+      try {
+        r = await fetch(url, {
+          headers: { Accept: 'text/event-stream' },
+          signal: ctrl.signal,
+        });
+      } catch { return stop('error'); }
+      if (!r.ok || !r.body) return stop('error');
+      touch();       // hiç olay gelmese bile sessizlik fark edilsin
+
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      /* Kaçışlı biçim mi? İlk parçada gerçek satır sonu yoksa ama metin
+         olarak kaçış dizisi varsa, bundan sonraki her parçayı çevirerek
+         okuyoruz. Karar BİR KEZ veriliyor; sunucu düzeltilirse çeviri hiç
+         devreye girmez ve gövde olduğu gibi işlenir. */
+      let escaped = null;
+
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          /* CRLF de olabilir; satır sonu ayrıştırması tek biçim görsün. */
+          let chunk = dec.decode(value, { stream: true })
+            .split('\r').join('');
+          /* Kararı ancak ipucu görünce ver: ilk parça yalnızca dolgudan
+             ibaret olabiliyor ve o parçada ne satır sonu ne kaçış var —
+             orada "kaçışlı değil" demek, sonraki parçaları bozardı. */
+          if (escaped === null && (chunk.includes(NL) || chunk.includes(ESC))) {
+            escaped = !chunk.includes(NL);
+          }
+          if (escaped) chunk = chunk.split(ESC).join(NL);
+          buf += chunk;
+
+          /* Çerçeveler boş satırla ayrılıyor; yarım kalan son parça
+             tamponda bir sonraki okumayı bekliyor. */
+          let k;
+          while ((k = buf.indexOf(NL + NL)) >= 0) {
+            const text = buf.slice(0, k);
+            buf = buf.slice(k + 2);
+            if (text.trim()) frame(text);
+          }
+          if (closed) break;
+        }
+        if (buf.trim() && !closed) frame(buf);
+      } catch {
+        /* abort da buraya düşüyor — `closed` zaten işaretli. */
+      }
+      stop('done');
+    })();
+
+    return { close: () => stop('closed') };
+  },
+
   candidates: async () => ({
     window_sec: 0, threshold: 0, metrics: [], count: 0,
     selected: 0, windows: [],
   }),
+
+  /* ============================================================ HLS =========
+     Grup kapsamlı oynatma. `streamUrl` video başına tek dosya veriyor; bu
+     ikisi grubun TAMAMINI tek çalma listesi olarak veriyor ve parçalar arası
+     geçişi tarayıcıya bırakıyor.
+
+     Adresler köprüden geçiyor (`/live`), çünkü playlist içindeki segment
+     yolları da orada bizim önekimize göre yeniden yazılıyor — bkz. server.py
+     `_rewrite_m3u8`. Doğrudan backend'e gidilirse hem CORS'a çarpılır hem de
+     segment adresleri çözülemez. */
+  hlsUrl: (groupId, kind = 'media') =>
+    `${LIVE}/playback/groups/${groupId}/hls/${kind}.m3u8`,
+
+  /** Grubun sunucu tarafındaki zaman çizelgesi — bizim GroupClock'un eşi. */
+  playbackTimeline: (groupId) =>
+    req(`/playback/groups/${groupId}/timeline`),
+
+  /**
+   * Duvar saati → oynatma offseti, SUNUCUNUN hesabıyla.
+   * Kendi hesabımız (`GroupClock.playFromWall`) var; bu, onu doğrulamak ve
+   * ileride yerine geçmek için duruyor.
+   */
+  resolvePlayback: (groupId, iso) =>
+    req(`/playback/groups/${groupId}/timeline/resolve`
+      + `?at=${encodeURIComponent(iso)}`),
 
   streamUrl: (id) => {
     // toCamera() imzası doğrulanmış proxy adresini buraya yazıyor; yoksa

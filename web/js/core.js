@@ -17,15 +17,13 @@ export const FEATURES = {
      uçlarını verdi — açık. */
   objects: true,
 
-  /* Video üstü kutu katmanı — ŞİMDİLİK KAPALI, ama kod ÇALIŞIR durumda.
+  /* Video üstü kutu katmanı — AÇIK.
        GET /playback/groups/{gid}/bboxes?start_at=&end_at=&format=json
      Uç grup kapsamlı ve duvar saatiyle sorgulanıyor; ikisini de backend.js
-     içindeki detections() çeviriyor ve hizalama doğrulandı.
-     Kapalı olmasının tek sebebi maliyet: 30 fps'te 60 saniyelik pencere
-     ~22 000 kutu / ~6 MB. Kayan pencere (playhead'i takip eden 20-30 sn)
-     yazılmadan açmak uzun kayıtlarda belleği şişirir.
-     Açmak için: `bbox: true` — başka hiçbir yere dokunmaya gerek yok. */
-  bbox: false,
+     içindeki detections() çeviriyor. Veri tüm videoyu kapsıyor ama tek
+     seferde inmiyor: playhead'in çevresinde üç pencere tutuluyor, gerisi
+     atılıyor (bkz. bboxfeed.js). Kapatmak için tek satır: `bbox: false`. */
+  bbox: true,
 
   /* BİRLEŞTİRME AÇIK. Bu ekip her zaman birden çok parça yükleyip tek bir
      kayıt elde ediyor; ayrı ayrı yüklemek diye bir kullanım yok. Kip
@@ -39,8 +37,25 @@ export const FEATURES = {
      işlevi de yoktu. Geri getirmek için: `mergeToggle: true`. */
   mergeToggle: false,
 
-  /* Re-ID: analiz hattında SOLIDER yok, embedding üretilmiyor. */
-  reid: false,
+  /* HLS — DENEME KİPİ, varsayılan KAPALI.
+       GET /playback/groups/{gid}/hls/media.m3u8
+     Grubun bütün parçaları tek çalma listesinde; açıldığında parça değiştirme
+     kodu devre dışı kalıyor ve yerel proxy'ye gerek kalmıyor. Kapalıyken
+     bugünkü yol (proxy / video stream) aynen çalışıyor — ikisi yan yana
+     duruyor ki karşılaştırılabilsin.
+
+     Tek videoda anlamı yok: uç grup kapsamlı.
+     Kod değiştirmeden denemek için adres çubuğu: `#/single/57?hls=1`.
+     Chrome için `web/vendor/hls.min.js` gerekiyor; dosya yoksa ekran
+     kendiliğinden bugünkü oynatıcıya düşüyor. */
+  hls: false,
+
+  /* Re-ID AÇIK. Backend uç verdi:
+       GET /analysis/result/groups/{gid}/video/{vid}/track/{tid}/reid/stream
+     Grup içindeki track'leri hedefle karşılaştırıp eşleşme sıralamasını SSE
+     ile gönderiyor. Object ekranındaki kip anahtarı bunu kullanıyor; bayrak
+     kapatılırsa anahtar çizilmez ve ekran bugünkü native davranışında kalır. */
+  reid: true,
   map: false,              // 지도 보기 — camera.lat/lon hazır, UI yok
 
   /* --- karşılığı olmayanlar ------------------------------------------------
@@ -89,8 +104,6 @@ function add(node, kids) {
   }
 }
 
-export const $ = (s, r = document) => r.querySelector(s);
-export const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 export function clear(n) { while (n && n.firstChild) n.removeChild(n.firstChild); return n; }
 export function mount(n, ...kids) { clear(n); add(n, kids); return n; }
 
@@ -171,10 +184,6 @@ const T = {
   },
 };
 export function t(k) { return (T[store.get('lang')] || T.en)[k] || k; }
-export function loc(obj, base) {
-  const l = store.get('lang');
-  return obj[`${base}_${l}`] ?? obj[`${base}_ko`] ?? obj[base] ?? '';
-}
 
 /* --------------------------------------------------------------- fmt ----- */
 
@@ -198,6 +207,21 @@ export function dur(sec) {
   const h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, s = Math.floor(sec % 60);
   return (h ? `${h}h ` : '') + (h || m ? `${m}m ` : '') + `${s}s`;
 }
+/**
+ * Saniye → kabaca "45s" / "12 min" / "2h 10m".
+ *
+ * `dur()` her basamağı yazıyor ("2m 0s"); kayıt boşluklarında istenen o
+ * değil, tek bakışta okunan bir büyüklük. Zaman çizgisindeki tarama alanı
+ * ile oynatıcı çubuğundaki rozet AYNI metni kullansın diye burada.
+ */
+export function roughDur(sec) {
+  const s = Math.max(0, Math.round(sec || 0));
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60), r = m % 60;
+  return r ? `${h}h ${r}m` : `${h}h`;
+}
 export function bytes(mb) {
   if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
   return Math.round(mb) + ' MB';
@@ -210,7 +234,6 @@ export function dateOf(isoStr) {
   if (!isoStr) return '';
   return isoStr.slice(0, 10);
 }
-export function pct(x) { return (x * 100).toFixed(0) + '%'; }
 
 /* ------------------------------------------------------- TimeMapper ------ */
 /**
@@ -351,15 +374,14 @@ export function trackColor(id) {
   return P[Math.abs(id * 7 + 3) % P.length];
 }
 
-export function simClass(s) { return s >= 0.72 ? 'hi' : s >= 0.45 ? 'mid' : 'lo'; }
-export function simColor(s) {
-  return s >= 0.72 ? '#22c55e' : s >= 0.45 ? '#eab308' : '#64748b';
-}
-
 /** Öznitelik nesnesini insan okur hale getirir. */
 export function attrText(attrs, attrDefs, cls) {
   if (!attrs || !attrDefs) return '';
-  const defs = attrDefs[cls === 'vehicle' ? 'vehicle' : 'person'] || [];
+  /* PAR yalnızca iki şema tanıyor: insan ve araç. `cls` artık modelin sınıf
+     adı, o yüzden eşleme burada. Hayvanın hiçbir özniteliği yok — araç
+     şeması hiçbir anahtarı tutmayacağı için boş dönüyor, doğrusu da bu. */
+  const which = (cls === 'person' || cls === 'falldown') ? 'person' : 'vehicle';
+  const defs = attrDefs[which] || [];
   const lang = store.get('lang');
   const out = [];
   for (const d of defs) {

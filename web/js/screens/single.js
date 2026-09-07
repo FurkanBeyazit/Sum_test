@@ -8,13 +8,16 @@ import {
   attrText
 } from '../core.js';
 import { VideoOverlay } from '../overlay.js';
+import { bboxFeed } from '../bboxfeed.js';
+import { attachHls } from '../hlsplayer.js';
+import { clockFor } from '../groupclock.js';
 import { Timeline } from '../timeline.js';
 import {
   ROOT, onLeave, statusLabel, topbar, treePanel, askReanalyze, findCam,
-  statusChip, skeletonRows,
+  statusChip, skeletonRows, playerControls, rememberVideo, scrubSpans,
 } from '../ui.js';
 
-export async function screenSingle(videoId) {
+export async function screenSingle(videoId, query) {
   const cam = findCam(videoId);
   if (!cam) {
     /* Eskiden sabit '#/single/CAM01'e yonlendiriyordu: canli modda oyle bir
@@ -26,6 +29,9 @@ export async function screenSingle(videoId) {
     return;
   }
 
+  /* Sekmeler bu kayda dönebilsin — bkz. ui.js rememberVideo(). */
+  rememberVideo(videoId);
+
   const stage = el('div.stage');
   const rightbar = el('div.rightbar');
   /* Öznitelik filtresi bu ekrandan kaldırıldı: burada olaylar var, nesneler
@@ -36,13 +42,74 @@ export async function screenSingle(videoId) {
   mount(ROOT(), topbar('single'), el('div.main', {}, sidebar, stage, rightbar));
 
   // -------- veri ---------------------------------------------------------
-  const [video, summary, evRes, objRes] = await Promise.all([
+  const [video, summary, evRes, objRes, parts] = await Promise.all([
     api.video(videoId), api.summary(videoId),
     api.events(videoId, { limit: 400 }), api.objects(videoId, { limit: 400 }),
+    api.groupParts(videoId),
   ]);
-  const events = evRes.items;
   const objects = objRes.items;
   const TM = new TimeMapper(video.start_time, summary.segments);
+
+  /* ---------------------------------------------------------- ÇOK PARÇALI --
+     Aynı kameradan sabah / öğlen / akşam üç ayrı kayıt geldiğinde üçü de aynı
+     grupta ayrı birer video olarak duruyor. `clock` varsa bu ekran onları TEK
+     bir kayıt gibi oynatıyor: eksen gerçek saati gösteriyor (aradaki boşluklar
+     dahil), oynatıcı ise boşluklarda beklemeden sonraki parçaya atlıyor.
+     Tek parçalıysa `clock` null ve ekran bugünkü davranışını aynen sürdürüyor
+     — çok parçalı kayıt yeni bir kip, eskisinin yerine geçen bir şey değil. */
+  const clock = clockFor(parts);
+
+  /* GÖRÜNEN EKSEN. Tek videoda medya zamanı (00:00 → süre), grupta duvar
+     ekseni (ilk kaydın başından son kaydın sonuna, boşluklar yer kaplar).
+     `seek`, scrub, zaman çizgisi ve olay işaretleri hep bu eksende konuşuyor;
+     parça içi saniyeye çeviri yalnızca oynatıcıya inerken yapılıyor. */
+  const AXIS = clock ? clock.wallTotal : video.duration;
+  let activeId = String(videoId);
+
+  /* ========================================================= HLS denemesi ==
+     İKİ OYNATMA YOLU YAN YANA.
+
+     bugünkü   parça başına <video src>, geçişi `switchPart()` yapıyor,
+               AVI kaynaklar için yerel proxy gerekiyor.
+     hls       grubun bütün parçaları tek çalma listesinde, geçişi tarayıcı
+               yapıyor, proxy'ye gerek yok.
+
+     Uç GRUP kapsamlı, o yüzden tek videoda anlamı yok. Varsayılan kapalı;
+     kod değiştirmeden denemek için adres çubuğuna `?hls=1`, geri dönmek için
+     `?hls=0`. Kütüphane bulunamazsa (bkz. hlsplayer.js) çalışma anında
+     bugünkü yola düşüyoruz — deneme kipi ekranı kilitlemesin. */
+  const hlsQ = query && query.get('hls');
+  const hlsAsked = hlsQ === '1' || (FEATURES.hls && hlsQ !== '0');
+  /* Tek şart GRUP: uç grup kapsamlı. Tek parçalı bir grupta da playlist var,
+     orada oynatma ekseni zaten kaydın kendi ekseni. */
+  let useHls = hlsAsked && video.group_id != null;
+  /* Kip SESSİZ AÇILIP KAPANMASIN: iki yol yan yana yaşadığı sürece hangisine
+     bakıldığı belirsiz kalırsa yapılan test de belirsiz olur. */
+  console.info('[hls] kip', {
+    istendi: hlsAsked, açık: useHls, group_id: video.group_id,
+    parça: clock ? clock.parts.length : 1,
+  });
+  if (hlsAsked && !useHls) {
+    toast('Bu kayıt bir gruba ait değil — HLS grup kapsamlı, açılamadı.',
+      'warn', 6000);
+  }
+
+  let events = evRes.items;
+  if (clock) {
+    /* Grubun BÜTÜN parçalarının olayları tek eksende toplanıyor; her olayın
+       zamanı kendi parçasının duvar saatindeki yerine kaydırılıyor. Böylece
+       zaman çizgisi, sağdaki liste ve `seek` aynı sayıyı konuşuyor. */
+    const per = await Promise.all(clock.parts.map((pt) =>
+      String(pt.id) === String(videoId)
+        ? Promise.resolve(evRes)
+        : api.events(pt.id, { limit: 400 }).catch(() => ({ items: [] }))));
+    events = clock.parts.flatMap((pt, i) => (per[i].items || []).map((e) => ({
+      ...e,
+      t_start: clock.wallSec(pt.id, e.t_start),
+      t_end: clock.wallSec(pt.id, e.t_end),
+      part_id: pt.id,
+    }))).sort((a, b) => a.t_start - b.t_start);
+  }
 
   // -------- üst şerit ----------------------------------------------------
   const hdr = el('div.hdr', {},
@@ -59,8 +126,9 @@ export async function screenSingle(videoId) {
       el('button.btn.sm', { onclick: () => reSummarize(video) }, '⟲ ' + t('reSummarize'))),
     el('div.hdr-sub', {},
       el('span', {}, 'Time range'),
-      el('b', { class: 'mono' },
-        `${dateOf(video.start_time)} ${clockOf(video.start_time)} ~ ${clockOf(video.end_time)}`),
+      el('b', { class: 'mono' }, clock
+        ? `${dateOf(video.start_time)} ${clock.summary()}`
+        : `${dateOf(video.start_time)} ${clockOf(video.start_time)} ~ ${clockOf(video.end_time)}`),
       el('span', { class: 'muted' }, '·'),
       /* Proxy'si olmayan ve backend'in codec/çözünürlük döndürmediği kayıtlar
          var (henüz ffprobe edilmemiş olabilir) — eksik alanları atlıyoruz,
@@ -77,22 +145,35 @@ export async function screenSingle(videoId) {
   // -------- video --------------------------------------------------------
   const vstack = el('div.vstack');
   const ovlCanvas = el('canvas', { class: 'ovl hit' });
-  let videoEl = null, overlay = null;
+  let videoEl = null, overlay = null, feed = null;
 
   const vwell = el('div.vwell', {}, vstack);
+  /* Grupta hangi parçanın oynadığı yazılmalı: eksen duvar saati olduğu için
+     kullanıcı kaydın kesildiği yeri sayaçtan anlayamaz. Tek videoda anlamsız,
+     o yüzden hiç çizilmiyor. */
+  const partTag = clock ? el('span.pill', { title: 'Playing part' }, '') : null;
   const hud = el('div.vhud', {},
     el('span.pill', {}, el('b', { id: 'hudclock' }, '--:--:--')),
+    partTag,
     el('span.pill', { id: 'hudobj' }, 'obj 0'),
-    el('span.pill', { id: 'hudsrc', title: 'Original / summary toggle' }, 'Original'));
+    el('span.pill', { id: 'hudsrc', title: 'Original / summary toggle' }, 'Original'),
+    /* Hangi oynatma yolunun kullanıldığı görünsün — iki yol yan yana
+       yaşadığı sürece hangisine baktığını bilmek şart. */
+    useHls ? el('span.pill.hls', { title: 'Group HLS playlist' }, '⦿ HLS') : null);
 
   /* `playable`: proxy VAR ya da kaynak zaten tarayıcının açabildiği bir
      MP4/H.264 — o durumda backend stream'i doğrudan oynatılır. Mock verisinde
      alan yok, orada has_proxy'ye düşüyoruz. */
-  const canPlay = video.playable ?? video.has_proxy;
+  /* HLS'te oynatılabilirlik kaynağın kodeğine BAĞLI DEĞİL: segmentleri
+     sunucu H.264 üretiyor, AVI kaynak bile açılıyor. Bu, HLS'e geçmenin asıl
+     kazancı — `playable` ayrımı ve yerel proxy tamamen gereksizleşiyor. */
+  const canPlay = useHls || (video.playable ?? video.has_proxy);
   if (canPlay) {
     videoEl = el('video', {
-      src: api.streamUrl(videoId),
-      poster: api.posterUrl(videoId),
+      /* HLS'te kaynağı kütüphane bağlıyor; burada `src` vermek ilk kareyi
+         yanlış dosyadan yükletirdi. */
+      src: useHls ? null : api.streamUrl(videoId),
+      poster: useHls ? null : api.posterUrl(videoId),
       preload: 'auto', playsinline: true,
     });
     // `.fill`: kuyuyu kapla, object-fit ile sığ — bkz. app.css `.vstack.fill`
@@ -125,55 +206,16 @@ export async function screenSingle(videoId) {
 
   vwell.append(hud);
 
-  // kontroller
-  const scrub = el('div.scrub', {},
-    el('div.track', {}, el('div.buf'), el('div.fill')),
-    el('div.knob'));
-  const tcode = el('div.tcode', {}, el('b', {}, '00:00:00'), ' / ', hms(video.duration));
-  const btnPlay = el('button.iconbtn', { title: 'Play / pause' }, '▶');
-  const vctl = el('div.vctl', {},
-    btnPlay,
-    el('button.iconbtn', { title: 'Back 10s', onclick: () => seek(cur() - 10) }, '⟲'),
-    el('button.iconbtn', { title: 'Forward 10s', onclick: () => seek(cur() + 10) }, '⟳'),
-    el('button.iconbtn', { title: 'Previous event', onclick: () => jumpEvent(-1) }, '⏮'),
-    el('button.iconbtn', { title: 'Next event', onclick: () => jumpEvent(1) }, '⏭'),
-    tcode,
-    scrub,
-    el('select.select', {
-      style: { width: '68px', padding: '4px 6px' },
-      onchange: (e) => { if (videoEl) videoEl.playbackRate = +e.target.value; },
-    }, [0.25, 0.5, 1, 2, 4].map(v =>
-      el('option', { value: v, selected: v === 1 }, v + '×'))),
-    /* Bindirme anahtarları detection verisine bağlı; gerçek API o veriyi
-       vermediği için canlıda hepsi ölü düğmeydi (FEATURES.bbox). */
-    FEATURES.bbox ? el('button.iconbtn', {
-      title: 'BBox', class: 'on', id: 'btnbox',
-      onclick: (e) => {
-        const on = e.currentTarget.classList.toggle('on');
-        if (overlay) { overlay.opts.boxes = on; overlay.draw(cur()); }
-      },
-    }, '▭') : null,
-    FEATURES.bbox ? el('button.iconbtn', {
-      title: 'Tracks', class: 'on',
-      onclick: (e) => {
-        const on = e.currentTarget.classList.toggle('on');
-        if (overlay) { overlay.opts.trails = on; overlay.draw(cur()); }
-      },
-    }, '⌇') : null,
-    FEATURES.bbox ? el('button.iconbtn', {
-      title: 'Labels', class: 'on',
-      onclick: (e) => {
-        const on = e.currentTarget.classList.toggle('on');
-        if (overlay) { overlay.opts.labels = on; overlay.draw(cur()); }
-      },
-    }, 'A') : null,
-    FEATURES.snapshot
-      ? el('button.iconbtn', { title: 'Snapshot', onclick: snapshot }, '📷')
-      : null,
-    el('button.iconbtn', {
-      title: 'Fullscreen',
-      onclick: () => vwell.requestFullscreen?.(),
-    }, '⛶'));
+  // kontroller — ortak çubuk, bkz. ui.js playerControls()
+  const { node: vctl, btnPlay, scrub, tcode } = playerControls({
+    duration: AXIS,
+    seek: (tt) => seek(tt),
+    cur: () => cur(),
+    overlay: () => overlay,
+    videoEl: () => videoEl,
+    fullscreenOf: () => vwell,
+    onSnapshot: () => snapshot(),
+  });
 
   const videobox = el('div.videobox', {}, vwell, canPlay ? vctl : null);
 
@@ -200,6 +242,20 @@ export async function screenSingle(videoId) {
       el('span.grow'),
       el('span', { class: 'tiny muted' },
         'Wheel = zoom · Shift+drag = pan · Double-click = fit'),
+      /* SAATE GİT. Grupta eksen gerçek zaman olduğu için "13:40'ta ne oldu"
+         sorusunun doğrudan bir girişi olmalı; kaydırarak bulmak dört saatlik
+         bir boşlukta işkence. Boş bir saat yazılırsa `seek` sonraki kaydın
+         başına yuvarlıyor ve kutu o saati gösteriyor. */
+      clock ? el('input.input.sm', {
+        id: 'goclock', type: 'text', placeholder: 'hh:mm',
+        title: 'Jump to wall-clock time',
+        style: { width: '84px', textAlign: 'center' },
+        onkeydown: (ev) => { if (ev.key === 'Enter') goToClock(ev.target); },
+      }) : null,
+      clock ? el('button.btn.sm.ghost', {
+        title: 'Jump to time',
+        onclick: () => goToClock(document.getElementById('goclock')),
+      }, '⏱ Go') : null,
       FEATURES.candidateScore ? el('button.btn.sm.ghost', {
         title: 'Why these ranges were sent to the VLM',
         onclick: () => showCandidates(candData, TM),
@@ -287,7 +343,53 @@ export async function screenSingle(videoId) {
 
   // ======================= davranış =======================================
   let TL;
-  const cur = () => videoEl ? videoEl.currentTime : store.get('playhead');
+  /* İKİ SAYAÇ. `cur()` GÖRÜNEN eksende (seek, ±10 sn, zaman çizgisi),
+     `curLocal()` oynatılan PARÇANIN içinde (overlay, kutu beslemesi, kare
+     yakalama). Tek videoda ikisi aynı sayı; grupta değil. */
+  const curLocal = () => {
+    if (!videoEl) return 0;
+    /* HLS'te `currentTime` bütün grubun oynatma ekseni; kutular ise parça
+       başına geliyor. Parça içindeki karşılığını çıkarıyoruz. */
+    if (useHls && clock) {
+      const hit = clock.at(clock.wallFromPlay(videoEl.currentTime));
+      return hit ? hit.offset : videoEl.currentTime;
+    }
+    return videoEl.currentTime;
+  };
+  const cur = () => {
+    if (!videoEl) return store.get('playhead');
+    if (useHls) {
+      return clock ? clock.wallFromPlay(videoEl.currentTime)
+                   : videoEl.currentTime;
+    }
+    return clock ? clock.wallSec(activeId, videoEl.currentTime)
+                 : videoEl.currentTime;
+  };
+
+  /**
+   * HLS'te parça değişimini YAKALAR — değiştirmez.
+   *
+   * Tek bir <video> var ve tarayıcı parçalar arasında kendiliğinden geçiyor;
+   * bizim tek işimiz kutu beslemesini yeni parçaya bağlamak, çünkü kutular
+   * hâlâ video başına sorgulanıyor. `switchPart`in HLS'teki karşılığı bu ve
+   * çok daha az iş yapıyor: kaynak değişmiyor, oynatma kesilmiyor.
+   */
+  function hlsPartSync(wallSec) {
+    if (!useHls || !clock) return;
+    const hit = clock.at(wallSec);
+    if (!hit || String(hit.part.id) === activeId) return;
+    activeId = String(hit.part.id);
+    if (feed) { feed.dispose(); feed = null; }
+    if (overlay) overlay.setDetections(null, { w: video.width, h: video.height });
+    if (FEATURES.bbox && overlay) {
+      feed = bboxFeed(hit.part.id, overlay,
+        { w: video.width, h: video.height }, hit.part.dur);
+    }
+    if (partTag) {
+      partTag.textContent = `${hit.part.name} · `
+        + `${clock.parts.indexOf(hit.part) + 1}/${clock.parts.length}`;
+    }
+  }
 
   function stat(k, v, sub) {
     return el('div.stat', {}, el('div', { class: 'k' }, k),
@@ -447,7 +549,9 @@ export async function screenSingle(videoId) {
     seek(e.t_start + .05);
     if (overlay && e.track_ids?.length) {
       overlay.highlightTrackId = e.track_ids[0];
-      overlay.draw(e.t_start);
+      /* `seek` zaten parça içi zamana çizdi; burada eksen zamanıyla yeniden
+         çizmek grupta yanlış kareye bakmak olurdu. */
+      overlay.redraw();
     }
   }
 
@@ -463,13 +567,103 @@ export async function screenSingle(videoId) {
     else toast(dir > 0 ? 'Last event' : 'First event', 'info', 1600);
   }
 
+  /**
+   * Görünen eksende bir ana git.
+   *
+   * Grupta istenen an bir boşluğa düşerse `clock.at()` SONRAKİ kaydın başına
+   * yuvarlıyor — kullanıcının "08:00 bitince direkt öğlenkine geçsin" isteği
+   * ve yandaki saat kutusuna boş bir saat yazıldığında olan şey aynı satır.
+   */
+  /** Yandaki saat kutusu — yazılan saatten devam et. */
+  function goToClock(input) {
+    if (!input || !clock) return;
+    const at = clock.parse(input.value);
+    if (at == null) {
+      toast('Enter a time inside the recording, e.g. 12:30', 'warn');
+      return;
+    }
+    const hit = clock.at(at);
+    seek(at);
+    if (hit && hit.gap) {
+      toast(`No recording at that time — jumped to ${clock.clock(
+        clock.wallSec(hit.part.id, 0))}`, 'info', 4000);
+    }
+    /* Kutuya gidilen ANI yazıyoruz, `cur()`u değil: parça değişimi
+       yükleme bitene kadar tamamlanmadığı için `cur()` hâlâ eski yeri
+       gösterebilir. */
+    input.value = clock.clock(hit && hit.gap
+      ? clock.wallSec(hit.part.id, 0) : at);
+  }
+
   function seek(tSec) {
-    const tt = Math.max(0, Math.min(video.duration - .05, tSec));
-    if (videoEl) videoEl.currentTime = tt;
+    const tt = Math.max(0, Math.min(AXIS - .05, tSec));
+    let local = tt;
+    if (clock && useHls) {
+      const hit = clock.at(tt);
+      if (!hit) return;
+      if (hit.gap) return seek(clock.wallSec(hit.part.id, 0) + .01);
+      local = hit.offset;
+      /* Tek eksen, tek atlama: boşluklar playlist'te yok, o yüzden duvar
+         saatini oynatma eksenine çevirmek yetiyor. */
+      hlsPartSync(tt);
+      if (videoEl) videoEl.currentTime = clock.playFromWall(tt);
+    } else if (useHls) {
+      // tek parçalı grup: playlist ekseni kaydın kendi ekseni
+      if (videoEl) videoEl.currentTime = tt;
+    } else if (clock) {
+      const hit = clock.at(tt);
+      if (!hit) return;
+      local = hit.offset;
+      if (hit.gap) {
+        // Boşluğa atlandı: playhead gerçekte kaydın başına gitti.
+        return seek(clock.wallSec(hit.part.id, 0) + .01);
+      }
+      switchPart(hit.part, local);
+    } else if (videoEl) {
+      videoEl.currentTime = local;
+    }
     store.set({ playhead: tt });
-    if (overlay) overlay.seek(tt);
+    // Duraklamışken `timeupdate` gelmiyor — bkz. objects.js'teki aynı not.
+    if (feed) feed.at(local);
+    if (overlay) overlay.seek(local);
     TL.playhead = tt; TL.draw();
     syncTime(tt);
+  }
+
+  /* Parça değiştirme. Aynı parça içindeyse yalnızca konum değişiyor; başka
+     parçaya geçiliyorsa <video> kaynağı yenileniyor ve kutu beslemesi o
+     parçaya bağlanıyor (kutular video başına geliyor, grup başına değil). */
+  function switchPart(part, offset, forcePlay) {
+    if (!videoEl) return;
+    if (String(part.id) === activeId) {
+      videoEl.currentTime = Math.max(0, Math.min(part.dur - .05, offset));
+      if (forcePlay) videoEl.play().catch(() => {});
+      return;
+    }
+    /* `forcePlay`: parça kendiliğinden bittiğinde <video> duraklamış sayılır,
+       yani `wasPlaying` false olur ve zincir orada kopardı. */
+    const wasPlaying = forcePlay || !videoEl.paused;
+    activeId = String(part.id);
+    if (feed) { feed.dispose(); feed = null; }
+    if (overlay) overlay.setDetections(null, { w: video.width, h: video.height });
+    if (FEATURES.bbox && overlay) {
+      feed = bboxFeed(part.id, overlay,
+        { w: video.width, h: video.height }, part.dur);
+    }
+    const onMeta = () => {
+      videoEl.removeEventListener('loadedmetadata', onMeta);
+      videoEl.currentTime = Math.max(0, Math.min(part.dur - .05, offset));
+      if (overlay) overlay.resize();
+      if (feed) feed.at(videoEl.currentTime);
+      if (wasPlaying) videoEl.play().catch(() => {});
+    };
+    videoEl.addEventListener('loadedmetadata', onMeta);
+    videoEl.src = api.streamUrl(part.id);
+    videoEl.load();
+    if (partTag) {
+      partTag.textContent = `${part.name} · ${clock.parts.indexOf(part) + 1}`
+        + `/${clock.parts.length}`;
+    }
   }
 
   /* Oynatıcı GEÇEN SÜREYİ gösterir (00:00 → süre), duvar saatini değil.
@@ -477,14 +671,19 @@ export async function screenSingle(videoId) {
      sayar. Duvar saati bilgisi kaybolmuyor: başlıktaki "Time range" satırında
      ve olay özetlerinde duruyor. */
   function syncTime(tt) {
-    tcode.firstChild.textContent = hms(tt);
-    const f = tt / video.duration;
+    /* Grupta sayaç DUVAR SAATİ gösteriyor: eksen gerçek zamansa oynatıcının
+       00:00'dan sayması kullanıcıyı iki ayrı zamana bakmaya zorlar. */
+    const label = clock ? clock.clock(tt) : hms(tt);
+    tcode.firstChild.textContent = label;
+    const f = tt / AXIS;
     scrub.querySelector('.fill').style.width = (f * 100) + '%';
     scrub.querySelector('.knob').style.left = (f * 100) + '%';
     const hc = document.getElementById('hudclock');
-    if (hc) hc.textContent = hms(tt);
+    if (hc) hc.textContent = label;
     const ho = document.getElementById('hudobj');
-    if (ho && overlay) ho.textContent = 'obj ' + overlay.boxesAt(tt).length;
+    if (ho && overlay) {
+      ho.textContent = 'obj ' + overlay.boxesAt(curLocal()).length;
+    }
   }
 
   function snapshot() {
@@ -496,7 +695,7 @@ export async function screenSingle(videoId) {
     if (overlay && overlay.opts.boxes) {
       // overlay'i tam çözünürlükte yeniden çiz (burn-in export mantığı)
       const g = { ox: 0, oy: 0, dw: c.width, dh: c.height };
-      for (const r of overlay.boxesAt(cur())) {
+      for (const r of overlay.boxesAt(curLocal())) {
         const [, tid, , , x1, y1, x2, y2] = r;
         cx.strokeStyle = trackColor(tid); cx.lineWidth = 2;
         cx.strokeRect(x1 * g.dw, y1 * g.dh, (x2 - x1) * g.dw, (y2 - y1) * g.dh);
@@ -505,7 +704,7 @@ export async function screenSingle(videoId) {
     c.toBlob(b => {
       const a = document.createElement('a');
       a.href = URL.createObjectURL(b);
-      a.download = `${videoId}_${hms(cur()).replace(/:/g, '')}.png`;
+      a.download = `${activeId}_${hms(curLocal()).replace(/:/g, '')}.png`;
       a.click();
       toast('Snapshot saved (with bounding boxes)', 'ok');
     });
@@ -520,11 +719,17 @@ export async function screenSingle(videoId) {
   onLeave(() => TL.destroy());
   TL.setData({
     lanes: [{ id: videoId, label: video.name, events }],
-    /* startIso VERİLMİYOR: tek video ekseninde eksen 00:00'dan başlar.
-       (Çoklu kamera ekranında duvar saati şart — kameraları hizalamanın
-       başka yolu yok — orada startIso hâlâ geçiliyor.) */
-    total: video.duration, startIso: null,
-    heat: candHeat, heatThreshold: candData ? candData.threshold : null,
+    /* Tek videoda startIso VERİLMİYOR: eksen 00:00'dan başlar, oynatıcı da
+       öyle sayar. Grupta tam tersi — eksen gerçek saat olmak zorunda, çünkü
+       kayıtlar arasındaki boşluğun yer kaplaması ancak öyle mümkün. */
+    total: AXIS,
+    startIso: clock ? clock.startIso : null,
+    gaps: clock ? clock.gaps : null,
+    spans: clock ? clock.spans : null,
+    /* Aday skoru giriş videosunun medya zamanında; duvar ekseninde yeri
+       yanlış olur. Grupta çizdirmiyoruz. */
+    heat: clock ? null : candHeat,
+    heatThreshold: candData ? candData.threshold : null,
   });
 
   // ---- overlay -----------------------------------------------------------
@@ -536,47 +741,116 @@ export async function screenSingle(videoId) {
       const o = objects.find(x => x.track_id === tid);
       if (o) showObject(o, videoId);
     };
-    // Bayrak kapalıyken hiç sorma: kutu çizilmeyecekse veri de gerekmiyor.
-    const det = FEATURES.bbox
-      ? await api.detections(videoId, { from: 0, to: video.duration })
-          .catch(() => null)
-      : null;
-    /* Bu await sırasında kullanıcı başka bir ekrana geçmiş olabilir; o zaman
-       DOM çoktan değişti ve aşağıdaki kurulum yok olmuş düğümlere yazıyor
-       ("Cannot set properties of null"). Ekran hâlâ bizimse devam. */
-    if (!document.body.contains(vwell)) return;
-    overlay.setDetections(det, { w: video.width, h: video.height });
+    /* Kutular playhead'i takip eden kayan pencereyle geliyor — bkz.
+       bboxfeed.js. Bayrak kapalıysa hiç istek atılmıyor. */
+    overlay.setDetections(null, { w: video.width, h: video.height });
+    if (FEATURES.bbox) {
+      feed = bboxFeed(videoId, overlay,
+        { w: video.width, h: video.height }, video.duration);
+      feed.at(0);
+    }
+    // `feed` parça değişiminde yenileniyor — o anki olanı kapat.
+    onLeave(() => { if (feed) feed.dispose(); });
     overlay.start();
+
+    /* ------------------------------------------------------ HLS bağlantısı
+       Manifest çözülünce süreyi kendi hesabımızla karşılaştırıyoruz. İkisi
+       tutmuyorsa playlist boşlukları bizim varsaydığımız gibi ATLAMIYOR
+       demektir ve duvar saati çevirisi kayar — sessizce yanlış bir eksen
+       göstermektense konsola yazıp söylüyoruz. */
+    if (useHls) {
+      attachHls(videoEl, api.hlsUrl(video.group_id), {
+        onReady: (d, yol) => {
+          const beklenen = clock ? clock.playTotal : video.duration;
+          const fark = Math.abs((d || 0) - beklenen);
+          console.info('[hls] bağlandı', { yol, playlist: d, hesap: beklenen });
+          toast(`HLS bağlandı (${yol}) — ${clock ? clock.parts.length : 1} `
+            + `parça, ${hms(d || 0)}`, 'ok', 3500);
+          if (d && fark > 2) {
+            toast(`HLS süresi hesabımızla tutmuyor (${Math.round(fark)} sn) — `
+              + 'saat eşlemesi kaymış olabilir', 'warn', 7000);
+          }
+          syncTime(cur());
+        },
+        onError: (msg) => toast('HLS: ' + msg, 'err', 6000),
+      }).then((h) => {
+        if (h) {
+          onLeave(() => h.destroy());
+          const pill = document.querySelector('.vhud .pill.hls');
+          if (pill) pill.title = `Group HLS playlist · ${h.mode}`;
+          return;
+        }
+        /* Kütüphane yok ya da tarayıcı desteklemiyor: deneme kipi ekranı
+           kilitlemesin, bugünkü oynatıcıya dön. */
+        useHls = false;
+        videoEl.src = api.streamUrl(activeId);
+        videoEl.load();
+        toast('hls.js bulunamadı — normal oynatıcıya dönüldü '
+          + '(web/vendor/hls.min.js)', 'warn', 7000);
+      });
+    }
+
+    if (partTag) {
+      const first = clock.parts.find((x) => String(x.id) === activeId)
+        || clock.parts[0];
+      partTag.textContent = `${first.name} · `
+        + `${clock.parts.indexOf(first) + 1}/${clock.parts.length}`;
+    }
     const hud0 = document.getElementById('hudobj');
     if (hud0) hud0.textContent = 'obj 0';
 
-    videoEl.addEventListener('loadedmetadata', () => { overlay.resize(); syncTime(0); });
+    /* syncTime(0) DEĞİL: bu olay parça değişiminde de tetikleniyor ve grupta
+       sayacı kaydın başına atardı. */
+    videoEl.addEventListener('loadedmetadata', () => {
+      overlay.resize(); syncTime(cur());
+    });
     videoEl.addEventListener('timeupdate', () => {
-      store.set({ playhead: videoEl.currentTime });
-      TL.playhead = videoEl.currentTime;
+      const tt = cur();
+      /* Önce parçayı yakala (besleme yenilenebilir), sonra besle. */
+      hlsPartSync(tt);
+      if (feed) feed.at(curLocal());
+      store.set({ playhead: tt });
+      TL.playhead = tt;
       TL.draw();
-      syncTime(videoEl.currentTime);
+      syncTime(tt);
+    });
+    /* Parça bitti: grupta beklemeden sonrakine geç. Kullanıcı 08:00'da biten
+       kayıttan sonra öğlenkini görmek istiyor, "video bitti" ekranını değil. */
+    videoEl.addEventListener('ended', () => {
+      /* HLS'te zincir playlist'in içinde: "bitti" gerçekten grubun sonu. */
+      if (!clock || useHls) return;
+      const nx = clock.next(activeId);
+      if (!nx) return;
+      switchPart(nx.part, 0, true);
     });
     videoEl.addEventListener('progress', () => {
       if (videoEl.buffered.length) {
         const e = videoEl.buffered.end(videoEl.buffered.length - 1);
-        scrub.querySelector('.buf').style.width = (e / video.duration * 100) + '%';
+        /* HLS'te tampon oynatma ekseninde; çubuk duvar ekseninde. */
+        const at = useHls
+          ? (clock ? clock.wallFromPlay(e) : e)
+          : (clock ? clock.wallSec(activeId, e) : e);
+        scrub.querySelector('.buf').style.width = (at / AXIS * 100) + '%';
       }
     });
     videoEl.addEventListener('play', () => btnPlay.textContent = '❚❚');
     videoEl.addEventListener('pause', () => btnPlay.textContent = '▶');
     btnPlay.onclick = () => videoEl.paused ? videoEl.play() : videoEl.pause();
 
+    /* Boşluklar ve parça sınırları — çubuk duvar ekseninde, oynatıcı
+       boşlukları atlıyor (bkz. ui.js scrubSpans). */
+    scrubSpans(scrub, clock, AXIS);
+
     // olay işaretleri
     for (const e of events) {
       scrub.append(el('div.evmark', {
-        style: { left: (e.t_start / video.duration * 100) + '%', background: e.color },
+        style: { left: (e.t_start / AXIS * 100) + '%', background: e.color },
         title: `${hms(e.t_start)} ${e.description}`,
       }));
     }
     scrub.onclick = (ev) => {
       const r = scrub.getBoundingClientRect();
-      seek((ev.clientX - r.left) / r.width * video.duration);
+      seek((ev.clientX - r.left) / r.width * AXIS);
     };
     // klavye
     const keys = (ev) => {
@@ -909,8 +1183,13 @@ function showObject(o, videoId) {
             .flatMap(([k, v]) => [el('dt', {}, k), el('dd', {}, String(v))])),
         el('div.divider'),
         el('div.row', {},
+          /* Object ekranını Re-ID kipinde, bu track hedefken açar —
+             parametre `track_id`, çünkü karşılaştırma ucu onu istiyor. */
           FEATURES.reid ? el('button.btn.sm', {
-            onclick: () => { location.hash = `#/objects/${videoId}?q=${o.id}`; },
+            onclick: () => {
+              location.hash = `#/objects/${o.video_id || videoId}`
+                + `?reid=${o.track_id}`;
+            },
           }, '🔍 Track this person (Re-ID)') : el('span', { class: 'tiny muted' },
             'Re-ID not implemented yet'),
           el('button.btn.sm.ghost', {

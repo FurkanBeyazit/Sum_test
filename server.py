@@ -627,6 +627,10 @@ class Handler(BaseHTTPRequestHandler):
         Bunlar ne terminalde ne dosyada işe yarıyor; log dosyasını asıl
         şişiren de bunlardı (istek başına iki satır, sayfa başına ~1200).
         """
+        # Re-ID akışı gürültü DEĞİL: tek bir istek, dakikalarca açık kalıyor
+        # ve neyin geldiğini görmek istiyoruz.
+        if "/reid/stream" in rel:
+            return False
         if rel.startswith("/analysis/result/"):
             if rel.endswith("/crop") or "/track/" in rel:
                 return True
@@ -675,6 +679,11 @@ class Handler(BaseHTTPRequestHandler):
         if n:
             req.add_header("Content-Length", str(n))
 
+        # Re-ID SSE akisi dakikalarca acik kalabilir; 120 sn'lik okuma zaman
+        # asimi sessiz bir akisi ortadan keserdi.
+        sse = "/reid/stream" in rel
+        timeout = 900 if sse else 120
+
         rng = self.headers.get("Range")
         # İki ayrı hedef, iki ayrı kural:
         #   terminal → gürültü hariç + `--live-only` süzgeci
@@ -689,7 +698,11 @@ class Handler(BaseHTTPRequestHandler):
         self._buf = []
         if not self._tty and not self._file:
             try:
-                with urllib.request.urlopen(req, timeout=120) as r:
+                with urllib.request.urlopen(req, timeout=timeout) as r:
+                    if sse:
+                        return self._relay_sse(r, r.status)
+                    if self._is_m3u8(rel, r.headers.get("Content-Type", "")):
+                        return self._relay_m3u8(r, r.status)
                     return self._relay(r, r.status)
             except urllib.error.HTTPError as e:
                 return self._relay(e, e.code)
@@ -715,7 +728,7 @@ class Handler(BaseHTTPRequestHandler):
 
         t0 = time.time()
         try:
-            with urllib.request.urlopen(req, timeout=120) as r:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
                 self._live_done(method, rel, r, r.status, t0)
         except urllib.error.HTTPError as e:
             self._live_done(method, rel, e, e.code, t0)
@@ -733,6 +746,34 @@ class Handler(BaseHTTPRequestHandler):
         el = (time.time() - t0) * 1000
         ctype = r.headers.get("Content-Type", "")
         mark = "✓" if code < 400 else "✗"
+
+        # SSE: gövdenin sonu YOK. `r.read()` akış kapanana kadar bloke olur ve
+        # olaylar tarayıcıya ancak en sonda, hepsi birden ulaşırdı — akışın
+        # bütün anlamı da buydu. Satır satır aktarıp her satırda flush.
+        if ctype.startswith("text/event-stream"):
+            self._emit(f"← {mark} {code}  {el:.0f} ms  SSE akışı açıldı")
+            self._flush()
+            return self._relay_sse(r, code)
+
+        # HLS playlist: küçük bir metin, ama içindeki adresler bizim önekimize
+        # göre düzeltilmeden tarayıcı segmentleri bulamıyor.
+        if self._is_m3u8(rel, ctype):
+            data = self._rewrite_m3u8(r.read())
+            self._emit(f"← {mark} {code}  {el:.0f} ms  "
+                       f"{len(data)/1024:.1f} KB  playlist")
+            self._dump("  gelen", data)
+            self._flush()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/vnd.apple.mpegurl")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-cache")
+            self._cors()
+            self.end_headers()
+            try:
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                pass
+            return
 
         if "json" in ctype or "text" in ctype:
             data = r.read()
@@ -804,6 +845,132 @@ class Handler(BaseHTTPRequestHandler):
             self._emit(term, full)
         elif self._file:
             LOG.write(full + "\n")
+
+    # -- HLS ----------------------------------------------------------------
+    @staticmethod
+    def _is_m3u8(rel, ctype):
+        return rel.split("?")[0].endswith(".m3u8") or "mpegurl" in ctype.lower()
+
+    def _rewrite_m3u8(self, body):
+        """Playlist içindeki adresleri BU sunucuya göre yeniden yazar.
+
+        Playlist'i tarayıcı okuyor ve içindeki her satırı kendi origin'ine
+        göre çözüyor. Backend mutlak bir yol yazdıysa (`/playback/videos/…`)
+        tarayıcı onu `http://127.0.0.1:8000/playback/…` diye ister ve 404
+        alır — köprü `/live` önekinin altında. Tam adres yazdıysa (backend'in
+        kendi host'u) bu sefer CORS'a çarpar; köprünün var oluş sebebi de
+        buydu.
+
+        Göreli satırlara DOKUNULMUYOR: onlar zaten playlist'in kendi adresine
+        göre çözülüyor, yani `/live/playback/groups/{id}/hls/` altına düşüyor
+        ve doğru yere gidiyor.
+        """
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError:
+            return body
+        base = LIVE_BASE.rstrip("/")
+
+        def fix(u):
+            if u.startswith(base):
+                return "/live" + u[len(base):]
+            if u.startswith("/") and not u.startswith("/live/"):
+                return "/live" + u
+            return u
+
+        out = []
+        for line in text.splitlines():
+            t = line.strip()
+            if not t:
+                out.append(line)
+            elif t.startswith("#"):
+                # #EXT-X-MAP / #EXT-X-KEY gibi etiketler adresi URI="…"
+                # icinde tasiyor; govde satiri degiller.
+                if 'URI="' in t:
+                    head, _, rest = t.partition('URI="')
+                    uri, _, tail = rest.partition('"')
+                    t = head + 'URI="' + fix(uri) + '"' + tail
+                out.append(t)
+            else:
+                # govde satiri = segment ya da alt playlist adresi
+                out.append(fix(t))
+        return (chr(10).join(out) + chr(10)).encode("utf-8")
+
+    def _relay_m3u8(self, r, code):
+        """Playlist'i yeniden yazıp gönderir (sessiz yol için)."""
+        data = self._rewrite_m3u8(r.read())
+        self.send_response(code)
+        self.send_header("Content-Type", "application/vnd.apple.mpegurl")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-cache")
+        self._cors()
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            pass
+
+    def _relay_sse(self, r, code):
+        """Server-sent events akışını GELDİĞİ GİBİ, parça parça geçirir.
+
+        İki tuzak var, ikisi de akışı sessizce öldürüyor:
+
+        1. `_relay` 64 KB'lık bloklar okuyor. Bir SSE olayı birkaç yüz bayt;
+           blok dolana kadar beklemek olayları dakikalarca burada tutar.
+
+        2. `readline()` de olmuyor — ve sebebi bu backend'e özgü: gövdede
+           GERÇEK satır sonu yok, satır sonları iki karakterlik kaçış dizisi
+           olarak yazılıyor (bkz. backend.js reidStream). `readline()` bir
+           `
+` beklediği için akış kapanana kadar hiç dönmez; tarayıcıya
+           tek bayt gitmez. curl'ün çalışıyor görünmesi de bundan: o satır
+           sonu beklemiyor.
+
+        Çözüm `read1`: o an ne varsa onu verir, hiçbir ayraç beklemez. Her
+        yazımdan sonra flush şart, yoksa parçalar soket tamponunda birikir.
+        Content-Length yok; bağlantı kapanarak bitiyor.
+        """
+        self.send_response(code)
+        self.send_header("Content-Type",
+                         r.headers.get("Content-Type", "text/event-stream"))
+        self.send_header("Cache-Control", "no-cache, no-transform")
+        # Araya bir ters vekil girerse tamponlamasın diye (nginx bunu okur).
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "close")
+        self.close_connection = True
+        self._cors()
+        self.end_headers()
+        n = 0
+        parts = 0
+        t0 = time.time()
+        # `read1` yoksa (çok eski sarmalayıcılar) bayt bayt oku: yavaş ama
+        # hiçbir ayraç beklemez, akış yine damla damla akar.
+        read = getattr(r, "read1", None) or (lambda k: r.read(1))
+        try:
+            while True:
+                chunk = read(65536)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                self.wfile.flush()
+                n += len(chunk)
+                parts += 1
+                # İlk parça belirleyici: geldiyse akış GERÇEKTEN akıyor,
+                # gelmiyorsa bir yerde tamponlanıyor demektir. Sonrasında
+                # her 10 parçada bir nabız — terminal dolmasın.
+                if parts == 1 or parts % 10 == 0:
+                    self._emit(f"  SSE ← {parts}. parça, {len(chunk)} bayt "
+                               f"(toplam {n}, {(time.time()-t0):.1f} sn)")
+                    self._flush()
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            # Tarayıcı akışı kapattı — beklenen son.
+            pass
+        except Exception as e:
+            self._emit(f"  SSE akışı koptu: {e}")
+            self._flush()
+        else:
+            self._emit(f"  SSE akışı bitti — {n} bayt")
+            self._flush()
 
     def _relay(self, r, code):
         """Yukarı akıştan gelen cevabı olduğu gibi aktarır (chunk chunk)."""
@@ -889,10 +1056,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Accept-Ranges", "bytes")
         # Geliştirme sunucusu: kod dosyaları asla önbelleğe alınmasın, yoksa
         # "değiştirdim ama hiçbir şey olmuyor" tuzağına düşülüyor.
+        # `vendor/` dışarıdan gelen ve hiç değişmeyen dosyalar (hls.js 600 KB) —
+        # onları her açılışta yeniden indirtmenin anlamı yok. Bizim kodumuz
+        # ise asla önbelleğe alınmasın, yoksa "değiştirdim ama hiçbir şey
+        # olmuyor" tuzağına düşülüyor.
+        vendor = "/vendor/" in target.as_posix()
         self.send_header(
             "Cache-Control",
-            "no-store" if target.suffix in (".js", ".mjs", ".css", ".html",
-                                            ".json") else "no-cache")
+            "no-store" if (not vendor and target.suffix in (
+                ".js", ".mjs", ".css", ".html", ".json")) else "no-cache")
         self._cors()
         self.end_headers()
         try:

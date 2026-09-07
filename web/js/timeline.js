@@ -11,10 +11,17 @@
      mode:'multi'  → kamera başına satır, kameralar arası bağlantı çizgileri
    ========================================================================= */
 
-import { pad, trackColor } from './core.js';
+import { pad, roughDur } from './core.js';
 
 const ROW_H = 26;
-const HEAD_H = 22;
+const HEAD_H = 22;          // zaman etiketleri satırı
+/* Parça şeridi — YALNIZCA çok parçalı grupta çiziliyor, tek videoda başlık
+   yüksekliği eskisi gibi kalıyor. Bu yüzden `HEAD_H` sabit, gerçek başlık
+   yüksekliği `this.hh`. */
+const SPAN_H = 17;
+/* Boşlukların rengi. Ne olay rengi ne playhead mavisi olmalı: "burada veri
+   yok" başka bir bilgi türü, kendi rengini hak ediyor. */
+const GAP_COL = '#f59e0b';
 const LANE_LABEL_W = 96;
 
 export class Timeline {
@@ -34,33 +41,77 @@ export class Timeline {
     this._userZoom = false;
     this.playhead = 0;
     this.startIso = null;     // duvar saati gösterimi için
+    /* Kayıt olmayan aralıklar — çok parçalı grupta iki kayıt arasındaki
+       boşluklar (bkz. groupclock.js). Ekseni GERÇEK saat kapladığı için bu
+       aralıklar da yer kaplıyor; boş bırakmak yerine taranıp "kayıt yok"
+       diye işaretleniyorlar, yoksa kullanıcı orayı sessiz bir kayıt sanıyor. */
+    this.gaps = null;         // [{t0,t1}] saniye
+    /* Kayıtların KENDİSİ — boşluğun tersi. Boşluğu taramak "burada yok"
+       diyor ama "nerede var" sorusunu cevaplamıyor: hangi parça saat kaçta
+       başlayıp kaçta bitiyor, kullanıcı bunu eksende göremiyordu. */
+    this.spans = null;        // [{t0,t1,idx}] saniye
     this.heat = null;         // [{t0,t1,score,candidate}] — aday구간 skorları
     this.heatThreshold = null;
     this.tracks = null;       // [{t0,t1,laneId,color,label}] — takip vurgusu
     this.onSeek = opts.onSeek || null;
     this.onPickEvent = opts.onPickEvent || null;
+    /* ---------------------------------------------------------- bağlama ---
+       İki şeridi "aynı kişi" diye işaretlemenin yolu: renkli şeritten
+       basılı tutup ötekine sürüklemek. Sürüklerken imleci bir çizgi takip
+       ediyor, altından geçilen şerit vurgulanıyor ve (onHoverEvent ile)
+       o an ekranda oynatılıyor — kullanıcı bırakmadan önce aynı kişi mi
+       diye bakabiliyor. Bırakınca iki şerit tek renge geliyor ve çizgi
+       kayboluyor: kimlik artık renkte, çizgiye gerek yok. */
+    this.onLinkEvent = opts.onLinkEvent || null;   // (fromEv, toEv) => void
+    /* (hedef|null, kaynak) — kaynağı da veriyoruz: ekranda "kimden kime"
+       gösterilebilsin. Sürükleme sırasında asıl soru bu. */
+    this.onHoverEvent = opts.onHoverEvent || null;
     this.activeEventId = null;
     this.hover = null;
     this._drag = null;
+    this._pending = null;    // basıldı ama henüz tık mı sürükleme mi belli değil
+    this.link = null;        // { from, x, y, over }
 
     this._onResize = () => this.resize();
     window.addEventListener('resize', this._onResize);
     canvas.addEventListener('mousedown', e => this._down(e));
     canvas.addEventListener('mousemove', e => this._move(e));
-    window.addEventListener('mouseup', () => { this._drag = null; });
-    canvas.addEventListener('mouseleave', () => { this.hover = null; this.draw(); });
+    this._onUp = () => this._up();
+    window.addEventListener('mouseup', this._onUp);
+    canvas.addEventListener('mouseleave', () => {
+      this.hover = null;
+      /* Sürükleme sürüyorsa iptal etme — imleç geri gelebilir. Sadece
+         hedefi düşür ki tuval dışında bırakmak yanlışlıkla bağlamasın;
+         karşılaştırma şeridi de kapansın, yoksa ekranda asılı kalıyor. */
+      if (this.link && this.link.over) {
+        this.link.over = null;
+        if (this.onHoverEvent) this.onHoverEvent(null, this.link.from);
+      }
+      this.draw();
+    });
     canvas.addEventListener('wheel', e => this._wheel(e), { passive: false });
     canvas.addEventListener('dblclick', () => this.fit());
     this.resize();
   }
 
-  destroy() { window.removeEventListener('resize', this._onResize); }
+  destroy() {
+    window.removeEventListener('resize', this._onResize);
+    window.removeEventListener('mouseup', this._onUp);
+  }
 
-  setData({ lanes, total, startIso, heat, tracks, heatThreshold }) {
+  setData({ lanes, total, startIso, heat, tracks, heatThreshold, gaps, spans }) {
     if (heatThreshold !== undefined) this.heatThreshold = heatThreshold;
     if (lanes) this.lanes = lanes;
     if (total !== undefined) { this.total = total; }
     if (startIso !== undefined) this.startIso = startIso;
+    if (gaps !== undefined) this.gaps = gaps;
+    /* GroupClock.spans doğrudan verilebilsin diye burada normalleşiyor:
+       zaman çizgisi `part` nesnesinin şeklini bilmek zorunda kalmasın. */
+    if (spans !== undefined) {
+      this.spans = spans && spans.length
+        ? spans.map((s, i) => ({ t0: s.t0, t1: s.t1, idx: i + 1 }))
+        : null;
+    }
     this.heat = heat || null;
     this.tracks = tracks || null;
     // Kullanıcı kendi penceresini seçmediyse her zaman tümünü göster.
@@ -77,8 +128,14 @@ export class Timeline {
     this.draw();
   }
 
+  /** Parça şeridi çiziliyor mu? Tek parçalı kayıtta gösterecek bir şey yok. */
+  get hasSpans() { return !!(this.spans && this.spans.length > 1); }
+
+  /** Gerçek başlık yüksekliği — parça şeridi varsa o kadar uzuyor. */
+  get hh() { return HEAD_H + (this.hasSpans ? SPAN_H : 0); }
+
   /** Şeritlerin başladığı y. */
-  get lanesY() { return HEAD_H; }
+  get lanesY() { return this.hh; }
 
   height() {
     return this.lanesY + Math.max(1, this.lanes.length) * ROW_H + 10;
@@ -145,18 +202,81 @@ export class Timeline {
       const x = this.X(t);
       c.strokeStyle = '#18222f';
       c.lineWidth = 1;
-      c.beginPath(); c.moveTo(x + .5, HEAD_H); c.lineTo(x + .5, H); c.stroke();
+      c.beginPath(); c.moveTo(x + .5, this.hh); c.lineTo(x + .5, H); c.stroke();
       c.fillStyle = '#526375';
       c.fillText(this.wallLabel(t), x + 4, HEAD_H / 2);
     }
     c.strokeStyle = '#223046';
-    c.beginPath(); c.moveTo(0, HEAD_H + .5); c.lineTo(W, HEAD_H + .5); c.stroke();
+    c.beginPath(); c.moveTo(0, this.hh + .5); c.lineTo(W, this.hh + .5); c.stroke();
+
+    // --- parça şeridi ------------------------------------------------------
+    if (this.hasSpans) this._drawSpans(c);
+
+    // --- kayıt olmayan aralıklar -----------------------------------------
+    /* Çapraz tarama, düz blok değil: düz bir blok "burada bir şey var ama
+       boş" gibi okunuyor, tarama "burada veri yok" diyor. Süre TEK BİR
+       yerde yazılıyor: burada, dikeyde ortada. Parça şeridinde de yazınca
+       aynı sayı iki kez okunuyor ve göz yoruyordu. */
+    if (this.gaps && this.gaps.length) {
+      const yTop = this.hh + 1;
+      for (const g of this.gaps) {
+        if (g.t1 <= this.t0 || g.t0 >= this.t1) continue;
+        const x0 = Math.max(this.plotX, this.X(g.t0));
+        const x1 = Math.min(this.plotX + this.plotW, this.X(g.t1));
+        const w = x1 - x0;
+        if (w >= 1) {
+          c.save();
+          c.beginPath(); c.rect(x0, yTop, w, H - yTop); c.clip();
+          c.fillStyle = '#0a0d13';
+          c.fillRect(x0, yTop, w, H - yTop);
+          /* Tarama artık kehribar: eski gri (#1b2735) zeminden neredeyse
+             ayrışmıyordu ve boşluk "sessiz bir kayıt" gibi okunuyordu. */
+          c.strokeStyle = 'rgba(245,158,11,.22)';
+          c.lineWidth = 1.2;
+          c.beginPath();
+          for (let x = x0 - H; x < x1 + H; x += 8) {
+            c.moveTo(x, H); c.lineTo(x + H, yTop);
+          }
+          c.stroke();
+          if (w > 46) {
+            /* Tek etiket, dikeyde satırların ortasında: boşluğun ne kadar
+               sürdüğü orada okunuyor, başka hiçbir yerde tekrarlanmıyor. */
+            const cx = (x0 + x1) / 2, cy = yTop + (H - yTop) / 2;
+            const len = roughDur(g.t1 - g.t0);
+            c.font = '700 10px ui-monospace, Consolas, monospace';
+            c.textAlign = 'center'; c.textBaseline = 'middle';
+            const tw = c.measureText(len).width;
+            c.fillStyle = 'rgba(8,12,18,.9)';
+            c.fillRect(cx - tw / 2 - 5, cy - 8, tw + 10, 16);
+            c.fillStyle = GAP_COL;
+            c.fillText(len, cx, cy);
+            c.textAlign = 'left';
+          }
+          c.restore();
+        }
+        /* Kenar çizgileri BLOĞUN DIŞINDA çiziliyor: uzaklaşınca boşluk bir
+           piksele düşüyor, tarama görünmez oluyor ama kesikli çizgi hâlâ
+           "burada kayıt kesildi" diyor. */
+        c.save();
+        c.strokeStyle = GAP_COL;
+        c.lineWidth = 1.5;
+        c.setLineDash([4, 3]);
+        for (const gx of [this.X(g.t0), this.X(g.t1)]) {
+          if (gx < this.plotX - 1 || gx > this.plotX + this.plotW + 1) continue;
+          c.beginPath();
+          c.moveTo(gx + .5, HEAD_H); c.lineTo(gx + .5, H);
+          c.stroke();
+        }
+        c.setLineDash([]);
+        c.restore();
+      }
+    }
 
     // --- aday구간 skoru şeridi (event_candidate_score) --------------------
     // Yükseklik = ihlal skoru, renk = eşiği aştı mı. Kural tabanlı motorun
     // "burayı VLM'e gönderdim çünkü…" cevabının görsel hâli.
     if (this.heat && this.heat.length) {
-      const H0 = HEAD_H + 1, HB = 7;
+      const H0 = this.hh + 1, HB = 7;
       c.fillStyle = '#0f1721';
       c.fillRect(this.plotX, H0, this.plotW, HB);
       for (const h of this.heat) {
@@ -286,8 +406,11 @@ export class Timeline {
       c.fillText(lbl, lx + 4, HEAD_H / 2 - 1);
     }
 
+    // --- bağlama çizgisi ---------------------------------------------------
+    if (this.link) this._drawLink(c);
+
     // --- hover ipucu -------------------------------------------------------
-    if (this.hover) this._tooltip(c, this.hover);
+    if (this.hover && !this.link) this._tooltip(c, this.hover);
 
     // --- zoom göstergesi ---------------------------------------------------
     if (span < this.total * .98) {
@@ -297,6 +420,144 @@ export class Timeline {
       c.fillRect(bx + bw * (this.t0 / this.total), by,
         Math.max(2, bw * (span / this.total)), 5);
     }
+  }
+
+  /**
+   * Parça şeridi — başlığın altında, eksenin tamamı boyunca.
+   *
+   * Boşluk taraması "burada kayıt yok" diyor; bu şerit onun tersini söylüyor:
+   * kayıt NEREDE var, hangi parça, saat kaçtan kaça. İkisi yan yana olunca
+   * "08:00'da bitti, 12:00'de devam etti" bilgisi tek bakışta okunuyor —
+   * kullanıcının eksende bulamadığı şey buydu.
+   *
+   * Kutuların içine sığdığı kadarı yazılıyor: dar kutuda yalnızca sıra
+   * numarası, orta genişlikte başlangıç saati, genişte tam aralık.
+   */
+  _drawSpans(c) {
+    const y = HEAD_H + 2, h = SPAN_H - 4;
+    const px = this.plotX, pw = this.plotW + 4;
+
+    c.save();
+    c.beginPath(); c.rect(px, HEAD_H, pw, SPAN_H); c.clip();
+    c.fillStyle = '#080b10';
+    c.fillRect(px, HEAD_H, pw, SPAN_H);
+    c.textBaseline = 'middle';
+
+    for (const s of this.spans) {
+      if (s.t1 < this.t0 || s.t0 > this.t1) continue;
+      const x0 = this.X(s.t0);
+      const w = Math.max(2, this.X(s.t1) - x0);
+
+      c.fillStyle = '#14324b';
+      this._rr(c, x0, y, w, h, 3); c.fill();
+      c.strokeStyle = '#2f7fb5'; c.lineWidth = 1;
+      this._rr(c, x0 + .5, y + .5, w - 1, h - 1, 3); c.stroke();
+
+      /* Uç işaretleri: kaydın BAŞLADIĞI ve BİTTİĞİ an. Kutunun kenarı
+         zaten orada ama iki parça birbirine yakınsa kenarlar birleşiyor. */
+      c.fillStyle = '#7dd3fc';
+      c.fillRect(x0, y, 2, h);
+      c.fillRect(x0 + w - 2, y, 2, h);
+
+      const from = this.wallLabel(s.t0).slice(0, 5);
+      const to = this.wallLabel(s.t1).slice(0, 5);
+      let txt = '';
+      if (w > 118) txt = `${s.idx} · ${from}–${to}`;
+      else if (w > 62) txt = `${s.idx} · ${from}`;
+      else if (w > 16) txt = String(s.idx);
+      if (txt) {
+        c.save();
+        c.beginPath(); c.rect(x0 + 3, y, w - 6, h); c.clip();
+        c.font = '700 9.5px ui-monospace, Consolas, monospace';
+        c.fillStyle = '#cfe6f8';
+        c.fillText(txt, x0 + 6, y + h / 2);
+        c.restore();
+      }
+    }
+
+    /* Boşluk şeritte yalnızca kesikli bir bağlantı: süre BİR KEZ, satırların
+       ortasında yazılıyor (bkz. draw). Aynı sayıyı iki yerde göstermek
+       ekranı yoruyordu. */
+    if (this.gaps) {
+      for (const g of this.gaps) {
+        const x0 = this.X(g.t0), x1 = this.X(g.t1);
+        if (x1 < px || x0 > px + pw) continue;
+        c.strokeStyle = GAP_COL;
+        c.lineWidth = 1; c.setLineDash([2, 2]);
+        c.beginPath();
+        c.moveTo(x0, y + h / 2); c.lineTo(x1, y + h / 2);
+        c.stroke();
+        c.setLineDash([]);
+      }
+    }
+    c.restore();
+
+    // şeridi eksenden ayıran çizgi
+    c.strokeStyle = '#223046';
+    c.beginPath();
+    c.moveTo(0, HEAD_H + .5); c.lineTo(this._w, HEAD_H + .5);
+    c.stroke();
+  }
+
+  /**
+   * Sürüklenen bağlama çizgisi.
+   *
+   * Kaynak şeridin ortasından imlece; hedefin üstündeyken imleç yerine
+   * hedefin ortasına yapışıyor ve şerit çerçeveleniyor. Yapışma önemli:
+   * çizginin nereye ineceği bırakmadan ÖNCE belli olmalı, yoksa kullanıcı
+   * yanlış şeride bağlayıp bunu ancak sonradan fark ediyor.
+   */
+  _drawLink(c) {
+    const L = this.link;
+    const col = L.from.color || '#ef4444';
+    const sx = (this.X(L.from.t_start) + this.X(L.from.t_end)) / 2;
+    const sy = L.from._y;
+    let ex = L.x, ey = L.y;
+
+    if (L.over) {
+      ex = (this.X(L.over.t_start) + this.X(L.over.t_end)) / 2;
+      ey = L.over._y;
+    }
+
+    c.save();
+    c.strokeStyle = col;
+    c.lineWidth = 2;
+    c.globalAlpha = L.over ? 1 : .75;
+    c.shadowColor = col; c.shadowBlur = 6;
+    c.beginPath();
+    c.moveTo(sx, sy);
+    /* Yatay kontrol noktalı bezier: iki şerit aynı satırdaysa bile çizgi
+       şeritlerin üstünden geçmiyor, kavis yapıp ayırt ediliyor. */
+    const dx = Math.max(24, Math.abs(ex - sx) * .4);
+    c.bezierCurveTo(sx + dx, sy, ex - dx, ey, ex, ey);
+    c.stroke();
+    c.shadowBlur = 0;
+
+    // kaynak ucu
+    c.fillStyle = col;
+    c.beginPath(); c.arc(sx, sy, 3.5, 0, 7); c.fill();
+
+    if (L.over) {
+      // hedef şeridi çerçevele — bırakınca buraya bağlanacak
+      const x = this.X(L.over.t_start);
+      const w = Math.max(6, this.X(L.over.t_end) - x);
+      const h = ROW_H - 8;
+      c.globalAlpha = 1;
+      c.strokeStyle = col; c.lineWidth = 2;
+      c.setLineDash([]);
+      this._rr(c, x - 2, ey - h / 2, w + 4, h, 3.5); c.stroke();
+      c.fillStyle = col;
+      c.beginPath(); c.arc(ex, ey, 4.5, 0, 7); c.fill();
+    } else {
+      // serbest uç: küçük bir artı, "henüz bir hedef yok"
+      c.globalAlpha = .9;
+      c.lineWidth = 1.6;
+      c.beginPath();
+      c.moveTo(ex - 5, ey); c.lineTo(ex + 5, ey);
+      c.moveTo(ex, ey - 5); c.lineTo(ex, ey + 5);
+      c.stroke();
+    }
+    c.restore();
   }
 
   _rr(c, x, y, w, h, r) {
@@ -339,7 +600,7 @@ export class Timeline {
     const lh = 15, h = lines.length * lh + 10;
     let x = Math.min(this._w - w - 6, Math.max(4, this.X(e.t_start) + 8));
     let y = e._y - h - 6;
-    if (y < HEAD_H + 2) y = e._y + 22;
+    if (y < this.hh + 2) y = e._y + 22;
     c.save();
     c.fillStyle = 'rgba(10,16,24,.97)';
     this._rr(c, x, y, w, h, 5); c.fill();
@@ -382,9 +643,35 @@ export class Timeline {
     const [x, y] = this._pt(e);
     if (e.shiftKey || e.button === 1) { this._drag = { x, t0: this.t0, t1: this.t1 }; return; }
     const hit = this._pick(x, y);
-    if (hit && this.onPickEvent) { this.onPickEvent(hit); return; }
+    /* Şeride basıldı: tık mı sürükleme mi henüz belli değil. Karar `_move`
+       içinde eşiği geçince veriliyor — eskiden basar basmaz `onPickEvent`
+       ateşleniyordu ve sürüklemeye yer kalmıyordu. */
+    if (hit) { this._pending = { ev: hit, x, y }; return; }
     if (x > this.plotX && this.onSeek) this.onSeek(Math.max(0, Math.min(this.total, this.T(x))));
   }
+
+  /** Fare bırakıldı: sürükleme bağlar, sürüklemeyen tık seçer. */
+  _up() {
+    this._drag = null;
+    if (this.link) {
+      const { from, over } = this.link;
+      this.link = null;
+      this._pending = null;
+      this.cv.style.cursor = 'default';
+      // sürükleme bitti: karşılaştırma şeridi kalksın
+      if (this.onHoverEvent) this.onHoverEvent(null, from);
+      if (over && over.id !== from.id && this.onLinkEvent) {
+        this.onLinkEvent(from, over);
+      } else {
+        this.draw();
+      }
+      return;
+    }
+    const p = this._pending;
+    this._pending = null;
+    if (p && this.onPickEvent) this.onPickEvent(p.ev);
+  }
+
   _move(e) {
     const [x, y] = this._pt(e);
     if (this._drag) {
@@ -395,6 +682,27 @@ export class Timeline {
       if (b > this.total) { a -= b - this.total; b = this.total; }
       this.t0 = Math.max(0, a); this.t1 = Math.min(this.total, b);
       this._userZoom = !(this.t0 <= 0 && this.t1 >= this.total);
+      this.draw();
+      return;
+    }
+    /* Eşiği geçen hareket = bağlama sürüklemesi. 4 piksel: elin titremesi
+       tıkı sürüklemeye çevirmesin, ama niyetli bir hareket hemen anlaşılsın. */
+    if (this._pending && !this.link && this.onLinkEvent) {
+      const d = Math.hypot(x - this._pending.x, y - this._pending.y);
+      if (d > 4) this.link = { from: this._pending.ev, x, y, over: null };
+    }
+    if (this.link) {
+      this.link.x = x; this.link.y = y;
+      const t = this._pick(x, y);
+      const tgt = t && t.id !== this.link.from.id ? t : null;
+      const changed = (tgt && tgt.id) !== (this.link.over && this.link.over.id);
+      this.link.over = tgt;
+      this.cv.style.cursor = tgt ? 'alias' : 'grabbing';
+      /* Hedefin üstüne gelindiği anda o an oynatılıyor — bırakmadan önce
+         "aynı kişi mi" sorusunun cevabı ekranda olsun. */
+      if (changed && this.onHoverEvent) {
+        this.onHoverEvent(tgt, this.link.from);
+      }
       this.draw();
       return;
     }

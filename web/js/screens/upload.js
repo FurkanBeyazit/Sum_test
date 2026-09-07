@@ -304,6 +304,12 @@ function probeDurationMs(file) {
 const EST_DUR_MS = 10 * 60 * 1000;
 
 /** Kırpma sonrası kullanılacak süre (kırpma yoksa dosyanın tamamı). */
+/* Kayıtlar arasında bu kadar boşluk varsa parçalar AYRI kalıyor.
+   Bir dakikanın altı kesintisiz bir çekimin kesim payıdır; saatlerce boşluk
+   ise "sabah / öğlen / akşam" demektir ve birleştirmek gerçek saatleri
+   kalıcı olarak yok eder (bkz. groupclock.js başlığı). */
+const GAP_LIMIT_MS = 60000;
+
 function effDur(it) {
   const full = it.durationMs || EST_DUR_MS;
   const a = it.trimIn || 0;
@@ -377,7 +383,11 @@ export async function screenUpload() {
 
   const live = true;   // tek veri kaynağı — bayrak geçiş dönemi kalıntısı
   const tlBox = el('div.uptl');
-  const listBox = el('div', { style: { display: 'grid', gap: '6px' } });
+  /* `.up-list`: kendi içinde kayan liste. Altı yedi klip eklenince panel
+     büyüyor, '⬆ Upload' ve '▶ Run analysis' ekranın altına kayıyor ve her
+     yüklemede aşağı kaydırmak gerekiyordu. Liste artık sabit yükseklikte
+     kalıyor, düğmeler yerinde duruyor. */
+  const listBox = el('div.up-list', { style: { display: 'grid', gap: '6px' } });
   const infoBox = el('div', { class: 'tiny muted' });
   const sideBox = el('div', { style: { display: 'grid', gap: '12px' } });
   const mergeNote = el('div', { class: 'tiny', style: { flex: 1, lineHeight: 1.6 } });
@@ -390,6 +400,19 @@ export async function screenUpload() {
       mergeNote.textContent = parts
         ? `${parts} file(s) will be registered as separate video_ids.`
         : 'Each file is registered as its own video_id.';
+      return;
+    }
+    const L = layoutUpload(UP.items);
+    if (L && L.gapMs > GAP_LIMIT_MS) {
+      /* Zaman çizelgeli grup: parçalar ayrı video_id olarak duruyor ama
+         oynatıcı onları tek kayıt gibi zincirliyor ve zaman çizgisi gerçek
+         saati boşluklarıyla birlikte gösteriyor. */
+      mergeNote.style.color = 'var(--ok)';
+      mount(mergeNote, el('div', {},
+        `${parts} clip(s) span ${hms(L.span / 1000)} with `
+        + `${hms(L.gapMs / 1000)} of gaps — they stay SEPARATE videos in one `
+        + 'group. Playback chains them and skips the gaps; the timeline shows '
+        + 'real clock time.'));
       return;
     }
     mergeNote.style.color = '#fbbf24';
@@ -991,9 +1014,85 @@ export async function screenUpload() {
     }
   }
 
+  /**
+   * ZAMAN ÇİZELGELİ GRUP — parçalar ayrı, oynatırken zincirleniyor.
+   *
+   * Her dosya kendi `video_id`'siyle aynı gruba giriyor ve kendi `start_at`
+   * değerini taşıyor. Tek fark normal yüklemeden şu: dosya ham gitmiyor,
+   * TEK parçalık bir birleştirme işinden geçiyor. Sebep oynatılabilirlik —
+   * ffmpeg çıktısı her zaman MP4 + H.264, dolayısıyla AVI kaynak da
+   * tarayıcıda açılıyor. (Bunu es geçersek grubun parçaları oynamaz.)
+   */
+  async function doPartsUpload() {
+    const todo = UP.items.filter((i) => i.state === 'pending');
+    if (!todo.length) return toast('No new files to upload', 'warn');
+    if (!UP.collName.trim()) return toast('Enter a collection name', 'warn');
+    if (todo.some((i) => !i.startAt)) {
+      return toast('Every clip needs a start time — set it on the timeline',
+        'warn', 6000);
+    }
+
+    const ordered = [...todo].sort((a, b) => a.startAt - b.startAt);
+    try {
+      if (!UP.groupId) UP.groupId = await ensureGroup(UP.collName);
+
+      for (const it of ordered) {
+        it.state = 'uploading'; it.progress = 0; drawList();
+        try {
+          const mid = (await api.mergeCreate()).merge_id;
+          await api.mergePart(mid, 0, it.file, (pr) => {
+            /* Tek parçalık iş: yükleme ilerlemesini yarıda tutuyoruz, kalan
+               yarısı ffmpeg'in remux süresi — kullanıcı çubuğun ortada
+               durmasını bekleme sanmasın diye. */
+            it.progress = pr * .5; drawList();
+          });
+          await api.mergeBuild(mid, [{
+            part: 0, in_ms: Math.round(it.trimIn || 0),
+            out_ms: Math.round((it.trimIn || 0) + effDur(it)),
+          }]);
+          it.progress = .9; drawList();
+
+          const res = await api.reserve(UP.groupId, [it.key]);
+          const videoId = res[0].video_id;
+          const v = await api.mergeUpload(mid, {
+            video_id: videoId,
+            name: it.name.replace(/\.[^.]+$/, ''),
+            description: it.meta || null,
+            start_at: it.startAt.toISOString(),
+            filename: `${it.name.replace(/\.[^.]+$/, '')}.mp4`,
+          });
+          it.videoId = videoId;
+          it.state = 'done'; it.progress = 1;
+          if (v && v.duration_ms) it.durationMs = v.duration_ms;
+          redraw();
+        } catch (e) {
+          it.state = 'error'; it.error = e.message; redraw();
+          toast(`${it.name}: ${e.message}`, 'err', 7000);
+        }
+      }
+
+      const okCount = ordered.filter((i) => i.state === 'done').length;
+      toast(`${okCount} clip(s) registered as a timeline group — open any one `
+        + 'of them to play the whole span', 'ok', 7000);
+
+      const last = ordered.filter((i) => i.videoId).pop();
+      if (last) await waitForVideoReady(last.videoId); else await refreshGroups();
+      mount(sidebar, treePanel(null, (c) => { location.hash = `#/single/${c.id}`; }));
+    } catch (e) {
+      toast('Upload failed: ' + e.message, 'err', 6000);
+    }
+  }
+
   async function doUpload() {
     if (!live) return toast('Upload only works in LIVE mode', 'warn');
-    if (UP.merge) return doMergeUpload();
+    if (UP.merge) {
+      /* Boşluk varsa birleştirme YANLIŞ alet: concat boşlukları siler ve
+         olayların gerçek saati bir daha geri gelmez. O durumda parçaları
+         ayrı tutup oynatırken zincirliyoruz. */
+      const L = layoutUpload(UP.items);
+      if (L && L.gapMs > GAP_LIMIT_MS) return doPartsUpload();
+      return doMergeUpload();
+    }
     const todo = UP.items.filter((i) => i.state === 'pending');
     if (!todo.length) return toast('No new files to upload', 'warn');
     if (!UP.collName.trim()) return toast('Enter a collection name', 'warn');
@@ -1137,7 +1236,7 @@ export async function screenUpload() {
         drop,
         listBox,
 
-        el('div.row', { style: { gap: '8px' } },
+        el('div.row.up-actions', { style: { gap: '8px' } },
           el('button.btn', { onclick: doUpload }, '⬆ Upload'),
           el('button.btn.ghost', { onclick: doAnalyze }, '▶ Run analysis'),
           el('span.grow'),

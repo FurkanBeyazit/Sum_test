@@ -7,7 +7,7 @@
    ========================================================================= */
 
 import { el, mount, store, api, toast } from './core.js';
-import { ROOT, runCleanup, topbar } from './ui.js';
+import { ROOT, runCleanup, topbar, startJobWatch } from './ui.js';
 import { mountAurora } from './fx/aurora.js';
 import { screenLogin } from './screens/login.js';
 import { screenSingle } from './screens/single.js';
@@ -52,10 +52,15 @@ async function route() {
          canlida her zaman 404 uretiyordu. Katalog bossa Home'a dus. */
       case 'single':
         if (!p[1]) { location.hash = '#/home'; return; }
-        await screenSingle(p[1]); break;
+        /* Sorgu dizesi ekrana geçiyor: `?hls=1` HLS oynatıcısını kod
+           değiştirmeden açıyor, `?hls=0` kapatıyor. */
+        await screenSingle(p[1], q); break;
       case 'objects':
         if (!p[1]) { location.hash = '#/home'; return; }
-        await screenObjects(p[1]); break;
+        /* Sorgu dizesi ekrana geçiyor: Analysis'ten gelen
+           `?reid=<track_id>` bağlantısı Object'i doğrudan Re-ID kipinde
+           açıyor. */
+        await screenObjects(p[1], q); break;
       case 'home': await screenHome(); break;
       case 'upload': await screenUpload(); break;
       // Jobs, Manage ekranina tasindi — eski yer imleri kirilmasin
@@ -118,6 +123,10 @@ async function boot() {
       + 'Then open: <b>http://127.0.0.1:8000/</b></div>';
     return;
   }
+  /* Kuyruk yoklayıcısı UYGULAMA ömrü boyunca çalışıyor, ekranla değil:
+     analiz sen başka ekrana geçtikten sonra bitiyor ve haberi orada
+     almalısın (bkz. ui.js startJobWatch). */
+  startJobWatch();
   route();
 }
 

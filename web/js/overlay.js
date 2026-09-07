@@ -13,6 +13,16 @@
    ========================================================================= */
 
 import { trackColor, COLOR_HEX } from './core.js';
+import { CLASS_NAME } from './backend.js';
+
+/* Renk yalnizca KIMLIGIN onemli oldugu yerde bilgi tasir.
+   Kalabalik bir kavsakta yirmi aracin yirmi ayri rengi hicbir sey anlatmiyor,
+   sadece goz yoruyor — "burada bir arac var" bilgisi icin notr bir cerceve
+   yeterli. Kisi ise takip edilen seyin ta kendisi: onu gozle izleyebilmek
+   icin her track kendi rengini tasimali.
+   Secili ya da sabitlenmis track her zaman bu kurali ezer. */
+const IDENTITY_CLASS = new Set([0]);   // 0 = person (bkz. backend.js COCO)
+const NEUTRAL = '#9fb0c4';
 
 export class VideoOverlay {
   /**
@@ -26,7 +36,8 @@ export class VideoOverlay {
 
     this.det = null;         // { fps, rows, index: Map<frameIdx, row[]> }
     this.meta = { w: 1920, h: 1080 };
-    this.opts = { boxes: true, trails: true, labels: true, conf: false };
+    this.opts = { boxes: true, trails: true, labels: true, conf: false,
+                  identityOnly: true };   // bkz. IDENTITY_CLASS
     this.filterTrackIds = null;   // null = hepsi
     this.highlightTrackId = null;
     /* track_id -> renk. Object Page'de sabitlenen nesne ızgarada, timeline'da
@@ -153,6 +164,11 @@ export class VideoOverlay {
 
   seek(t) { this._t = t; this.draw(t); }
 
+  /* Veri sonradan geldiginde ayni ana yeniden cizer. Video DURAKLAMISKEN
+     cizim dongusu ilerlemiyor (rVFC kare gelmedikce ateslenmez), yani yeni
+     pencere indiginde kimse ekrani tazelemezse kutular gorunmez. */
+  redraw() { this.draw(this._t); }
+
   /* -------------------------------------------------------------- çizim -- */
 
   boxesAt(t) {
@@ -199,6 +215,12 @@ export class VideoOverlay {
     if (this.opts.trails) {
       for (const r of rows) {
         const tid = r[1];
+        /* Iz de bir vurgu bicimi: yirmi aracin yirmi kuyrugu kareyi okunmaz
+           hale getiriyor. Yalnizca kimlik tasiyan ya da one cikmis track. */
+        const show = IDENTITY_CLASS.has(r[2])
+          || this.highlightTrackId === tid
+          || (this.colorOf && this.colorOf.has(tid));
+        if (this.opts.identityOnly && !show) continue;
         const pts = this.trailFor(tid, t);
         if (pts.length < 3) continue;
         c.save();
@@ -231,11 +253,15 @@ export class VideoOverlay {
       const mark = this.colorOf && this.colorOf.get(tid);
       const focusing = this.highlightTrackId !== null
         || (this.colorOf && this.colorOf.size > 0);
-      const back = focusing && !hot && !mark;
-      const col = back ? '#8296ad' : (mark || trackColor(tid));
+      /* Kimlik tasimayan siniflar (arac vb.) one cikan bir sey OLMASA DA
+         geri planda: renkleri bilgi tasimadigi icin onlari one almanin
+         karsiligi yok. Kisi ise ancak baska bir sey one ciktiginda geriler. */
+      const plain = this.opts.identityOnly && !IDENTITY_CLASS.has(cls);
+      const back = !hot && !mark && (focusing || plain);
+      const col = back ? NEUTRAL : (mark || trackColor(tid));
 
       c.save();
-      if (back) c.globalAlpha = .32;
+      if (back) c.globalAlpha = focusing ? .28 : .45;
       c.lineWidth = hot ? 2.5 : (back ? 1.1 : 1.6);
       c.strokeStyle = col;
       if (hot) { c.shadowColor = col; c.shadowBlur = 12; }
@@ -261,7 +287,12 @@ export class VideoOverlay {
       // 3) etiket
       if (this.opts.labels && ph > 26) {
         const attrs = this.attrOf.get(tid) || {};
-        let txt = `#${tid} ${cls === 0 ? 'person' : 'vehicle'}`;
+        /* Sınıf adı: önce listeden gelen hazır etiket (`setTrackMeta`),
+           yoksa ham kimlikten. Eskiden burada `cls === 0 ? 'person' :
+           'vehicle'` yazıyordu — model on üç sınıf çıkarıyor, on ikisi
+           "vehicle" görünüyordu: köpek de, traktör de, düşen insan da. */
+        let txt = this.labelOf.get(tid)
+          || `#${tid} ${CLASS_NAME[cls] || `class ${cls}`}`;
         if (this.opts.conf) txt += ` ${(conf * 100).toFixed(0)}%`;
         c.save();
         c.font = '600 10px ui-monospace, Consolas, monospace';
@@ -319,7 +350,10 @@ export class VideoOverlay {
   _click(e) {
     const [x, y] = this._pt(e);
     const b = this._hitTest(x, y);
-    if (b && this.onPick) this.onPick(b.tid, b);
+    /* Kutuya DENK GELMEYEN tık da bildiriliyor (tid = null). Boşluğa
+       tıklamak seçimi kaldırmanın en doğal yolu; ekranlar bunu kendi
+       seçim durumlarına göre yorumluyor. */
+    if (this.onPick) this.onPick(b ? b.tid : null, b || null);
   }
   _hover(e) {
     const [x, y] = this._pt(e);

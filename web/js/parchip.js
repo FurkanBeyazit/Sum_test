@@ -46,12 +46,15 @@ export function ageIcon(v) {
 export function genderIcon(v) {
   const male = String(v).toLowerCase().startsWith('m');
   const c = male ? '#60a5fa' : '#f472b6';
-  const inner = male
-    ? '<circle cx="8" cy="14" r="5"/><path d="M12 10 19 3"/><path d="M14 3h5v5"/>'
-    : '<circle cx="10" cy="8" r="5"/><path d="M10 13v7"/><path d="M6.5 17h7"/>';
-  return `<svg viewBox="0 0 22 22" width="15" height="15" fill="none"
-      stroke="${c}" stroke-width="1.8" stroke-linecap="round"
-      aria-hidden="true">${inner}</svg>`;
+  const body = male
+    /* Düz gövde, iki bacak. */
+    ? '<path d="M8 8.4h6v5.6H8z"/>'
+      + '<path d="M8.4 14h2v5.4h-2z"/><path d="M11.6 14h2v5.4h-2z"/>'
+    /* Omuzdan aşağı açılan etek, altında iki bacak. */
+    : '<path d="M9 8.4h4l2.4 6.6H6.6z"/>'
+      + '<path d="M8.9 15h1.9v4.4H8.9z"/><path d="M11.2 15h1.9v4.4h-1.9z"/>';
+  return `<svg viewBox="0 0 22 22" width="15" height="15" fill="${c}"
+      aria-hidden="true"><circle cx="11" cy="4.6" r="2.8"/>${body}</svg>`;
 }
 
 /** Saç — uzunluk siluetten okunuyor. */
@@ -146,7 +149,7 @@ const EXTRA_ICON = {
  * Tek bir PAR özniteliği → rozet.
  * @returns {HTMLElement|null} tanınmayan/boş değerde null (satırı kirletme)
  */
-export function parChip(key, value) {
+function parChip(key, value) {
   const k = String(key).toLowerCase();
   const v = String(value);
   if (!v || /^(any|unknown|n\/a)$/i.test(v)) return null;
