@@ -227,6 +227,22 @@ body {
    ========================================================================== */
 
 .tree { padding: 4px 0; }
+/* Koleksiyon basligi — gruplarin USTUNDEKI katman.
+   Grup basligindan ayrilmasi gerekiyor yoksa iki duzey ic ice okunmuyor:
+   ust cizgi bolumu ayiriyor, kucuk buyuk harf ve harf araligi da "bu bir
+   baslik, tiklanacak bir sey degil" diyor. */
+.tree-col {
+  display: flex; align-items: center; gap: 7px;
+  padding: 9px 11px 5px; margin-top: 4px;
+  border-top: 1px solid var(--line);
+  font-size: 10.5px; font-weight: 700; letter-spacing: .8px;
+  text-transform: uppercase; color: var(--tx-3);
+}
+.tree-col:first-child { border-top: 0; margin-top: 0; }
+.tree-col.click { cursor: pointer; }
+.tree-col.click:hover { background: var(--bg-2); color: var(--tx-1); }
+.tree-col .gsub { letter-spacing: 0; font-weight: 500; }
+
 .tree-group {
   display: flex; align-items: center; gap: 7px;
   padding: 7px 11px; cursor: pointer; user-select: none;
@@ -864,6 +880,20 @@ body {
 }
 
 /* Renk seçici — <body>'ye eklenir, karta göre konumlanır. */
+/* Kalici uyari seridi — baslik ile icerik arasinda, gorulmemesi zor.
+   Bildirim (toast) kaybolur; bu kaybolmaz. */
+.op-banner {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 8px; padding: 8px 12px;
+  border: 1px solid rgba(245, 158, 11, .45);
+  border-left-width: 3px;
+  border-radius: var(--r);
+  background: rgba(245, 158, 11, .10);
+  color: #fcd34d; font-size: 12px; line-height: 1.45;
+}
+.op-banner .op-bannerico { font-size: 15px; line-height: 1; }
+.op-banner b { color: #fde68a; }
+
 .op-pop {
   position: fixed; z-index: 120;
   background: var(--bg-2); border: 1px solid var(--line);
@@ -877,6 +907,18 @@ body {
 .op-popsw {
   display: grid; grid-template-columns: repeat(6, 22px); gap: 6px;
 }
+/* Bağlantıyı bozan düğme paletten AYRI okunmalı: renk seçmek geri
+   alınabilir, bağlantıyı silmek bir kaydı siliyor. Renk kutucuklarından
+   çizgiyle ayrılıyor ve tehlike rengine yaklaşıyor. */
+.op-unlinkbtn { color: #fca5a5; }
+.op-unlinkbtn:hover { background: rgba(239, 68, 68, .14); color: #fecaca; }
+
+.op-unlink {
+  display: block; width: 100%; margin-top: 8px; padding-top: 7px;
+  border-top: 1px solid var(--line); border-radius: 0;
+  color: #fca5a5;
+}
+.op-unlink:hover { background: rgba(239, 68, 68, .12); color: #fecaca; }
 
 /* --- Info ----------------------------------------------------------------
    Kapalı hâl tek şerit (~64px); ayrıntı tablosu başlıktaki okla açılıyor.
@@ -1366,6 +1408,9 @@ table.mg .warnq { color: #fbbf24; }
 /* .mg-pill kaldırıldı: kuyruk rozeti artık ortak `.st` skalasını kullanıyor. */
 
 /* Manage: üç panel dikey — kuyruk en altta, kalan alanı paylaşırlar */
+/* Koleksiyon paneli en ustte ve kucuk: nadiren degisiyor, ekranin
+   cogunlugunu gruplar ve videolar almali. */
+.mg-cols   { flex: 0 0 auto; max-height: 24%; min-height: 92px; }
 .mg-groups { flex: 0 0 auto; max-height: 30%; }
 .mg-videos { flex: 1 1 auto; min-height: 160px; }
 .mg-queue  { flex: 0 0 auto; max-height: 34%; min-height: 120px; }
@@ -1375,3 +1420,74 @@ table.mg .warnq { color: #fbbf24; }
    panel de ona uyuyor — kırpmasın diye overflow serbest. */
 .op-tlbody { padding: 6px; overflow: visible; }
 
+
+
+/* ==========================================================================
+   Collection ekrani  (#/collection/:id)
+   --------------------------------------------------------------------------
+   Bu ekranin tek zor kismi DIKEY BUTCE: zaman cizgisi band acilip kapandikca
+   yukseklik degistiriyor. Panel `flex` ile buyuyup kuculuyor, oynatici ise
+   asgari bir yuksekligi koruyor — aksi hâlde uc band acildiginda video birkac
+   piksele iniyor ve ekranin amaci (goruntuye bakmak) kayboluyor.
+   ========================================================================== */
+.cl-player {
+  flex: 1 1 auto; min-height: 220px;
+  display: flex; flex-direction: column;
+}
+.cl-player .vwell { flex: 1 1 auto; min-height: 0; }
+.cl-tl { flex: 0 0 auto; }
+.cl-tl .panel-b { overflow: hidden; }
+
+/* Hangi kameraya bakildigi videonun ustunde yaziyor. Oynatici hover ile
+   grup degistirdigi icin bu etiket ekranin en cok degisen bilgisi —
+   kullanici hangi goruntude oldugunu buradan okuyor. */
+.cl-camtag {
+  position: absolute; left: 10px; top: 10px; z-index: 3;
+  padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(8, 12, 18, .82);
+  font: 600 11px "Malgun Gothic", sans-serif; color: #dbe6f2;
+  pointer-events: none;
+}
+
+.cl-modes { display: flex; gap: 4px; margin-right: 10px; }
+
+/* Kirpimin hangi kameradan geldigi — HARFLE.
+   Koleksiyonda kartlar gruplara ayrilmiyor (amac gruplar arasi esleme), o
+   yuzden "hangi kamera" bilgisini tasiyacak bir yer gerekiyor. Once renkli
+   bir seritti; renk artik yalnizca KISIYI anlatiyor, o yuzden rozet tek
+   renkli. Kartin SOL ustunde duruyor: sag ust kose renk noktasinin
+   (.objdot) yeri. */
+.cl-cam {
+  position: absolute; left: 4px; top: 4px; z-index: 2;
+  min-width: 15px; height: 15px; padding: 0 3px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 4px;
+  background: rgba(8, 12, 18, .78); border: 1px solid var(--line);
+  font: 700 9.5px ui-monospace, Consolas, monospace;
+  color: #9fb0c4; letter-spacing: .5px;
+}
+
+.cl-list { flex: 1 1 auto; min-height: 140px; }
+
+.cl-people { flex: 0 0 auto; max-height: 34%; min-height: 96px; }
+
+.cl-row, .cl-person-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 9px; cursor: pointer;
+  border-bottom: 1px solid var(--line);
+}
+.cl-row:hover, .cl-person-row:hover { background: var(--bg-2); }
+.cl-row.on { background: var(--bg-3); }
+.cl-rowt {
+  font-size: 12px; color: var(--tx-1);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Grup rengi noktada: satirin hangi kameradan geldigi, zaman cizgisindeki
+   band rengiyle AYNI. Iki yerde ayni renk = tek bir kimlik. */
+.cl-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
+}
+.cl-person {
+  font: 700 10px var(--mono); letter-spacing: .3px; flex: 0 0 auto;
+}

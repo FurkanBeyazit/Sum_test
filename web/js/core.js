@@ -37,17 +37,20 @@ export const FEATURES = {
      işlevi de yoktu. Geri getirmek için: `mergeToggle: true`. */
   mergeToggle: false,
 
-  /* HLS — DENEME KİPİ, varsayılan KAPALI.
+  /* HLS — varsayılan KAPALI, ama artık ekrandan açılabiliyor.
        GET /playback/groups/{gid}/hls/media.m3u8
-     Grubun bütün parçaları tek çalma listesinde; açıldığında parça değiştirme
-     kodu devre dışı kalıyor ve yerel proxy'ye gerek kalmıyor. Kapalıyken
-     bugünkü yol (proxy / video stream) aynen çalışıyor — ikisi yan yana
-     duruyor ki karşılaştırılabilsin.
+     Grubun bütün parçaları tek çalma listesinde; parça değiştirme kodu devre
+     dışı kalıyor ve yerel proxy'ye gerek kalmıyor.
+
+     BİR SÜRE VARSAYILAN AÇIKTI, GERİ ALINDI: sahada denendiğinde parça
+     geçişlerinde Stream yolundan gözle görülür biçimde yavaş kaldı (segment
+     tamponlaması, geçişte duraklama). Yol yanlış değil, bugünkü hâliyle
+     daha yavaş — o yüzden varsayılan eski yol, HLS bir tık uzakta:
+     koleksiyon başlığındaki Stream/HLS anahtarı ya da `?hls=1`.
 
      Tek videoda anlamı yok: uç grup kapsamlı.
-     Kod değiştirmeden denemek için adres çubuğu: `#/single/57?hls=1`.
      Chrome için `web/vendor/hls.min.js` gerekiyor; dosya yoksa ekran
-     kendiliğinden bugünkü oynatıcıya düşüyor. */
+     kendiliğinden eski oynatıcıya düşüyor ve sebebini yazıyor. */
   hls: false,
 
   /* Re-ID AÇIK. Backend uç verdi:
@@ -137,6 +140,9 @@ export const store = new Store({
      kaldırıldı; localStorage'da kalmış olabilir, ona düşmüyoruz. */
   lang: localStorage.getItem('lang') === 'ko' ? 'ko' : 'en',
   groups: [],
+  /* Koleksiyonlar — gruplarin ustundeki katman. Agac paneli gruplari bunlarin
+     altina diziyor; bos kalirsa eski duz liste gorunumu aynen kaliyor. */
+  collections: [],
   attributes: null,
 
   filters: { cls: '', gender: '', upper_color: [], carry: [], age: '' },
@@ -148,7 +154,10 @@ export const store = new Store({
 
 const T = {
   en: {
-    videoList: 'Video Collection', objectFilter: 'Object filter',
+    /* 'Video Collection' DEGIL: artik backend'de gercek bir collection
+       kavrami var (gruplarin demeti) ve bu panel onu degil, kayitlarin
+       agacini gosteriyor. Ayni kelimeyi iki sey icin kullanmak karisiyordu. */
+    videoList: 'Recordings', objectFilter: 'Object filter',
     videoInfo: 'Video info', summaryInfo: 'Analysis info',
     eventFlow: 'Event timeline',
     reSummarize: 'Re-analyze', viewOriginal: 'Open original',

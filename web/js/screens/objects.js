@@ -45,11 +45,15 @@ import { bboxFeed } from '../bboxfeed.js';
 import { attachHls } from '../hlsplayer.js';
 import { Timeline } from '../timeline.js';
 import { clockFor } from '../groupclock.js';
+import { loadIdentities, idKey } from '../identity.js';
 import {
   ROOT, onLeave, topbar, treePanel, skeletonCards, playerControls,
   rememberVideo, scrubSpans,
 } from '../ui.js';
-import { parChips, ageIcon, genderIcon } from '../parchip.js';
+import { parChips } from '../parchip.js';
+/* Arama paneli koleksiyon ekranıyla PAYLAŞILIYOR — iki kopya ilk
+   değişiklikte ayrışırdı (bkz. objsearch.js). */
+import { buildSearch, parQuery } from '../objsearch.js';
 
 /* Kullanıcının kişi işaretlemek için kullandığı palet. Izgara kenarlığı,
    timeline şeridi ve video bbox'ı aynı rengi kullansın diye tek kaynak. */
@@ -61,62 +65,6 @@ const PREVIEW_COLOR = '#94a3b8';
    soluk bir ton. Kullanıcının verdiği renk bunların üstünde parlar. */
 const CLASS_TINT = {
   person: '#3f5468', vehicle: '#4a4a5e', bicycle: '#41564a', other: '#3a4250',
-};
-
-/* --------------------------------------------------------- arama paneli ---
-   Wireframe'deki satırlar, PAR modelinin gerçekten ürettiği değerlerle.
-   Gözlenen sözlük (swin_v2_t):
-
-     age: ["Adult"]   gender: ["Female"]   hair: ["Short"]
-     upper: ["Any"]   lower: ["Black"]     Hat: false   Backpack: false
-
-   Değerler baş harfi büyük geliyor; eşleştirme yine de büyük/küçük harf
-   duyarsız. "Any" modelin kararsız kaldığı yer — süzgeçte yok. */
-/* Süzgeçteki sınıflar. Değer artık MODELİN KENDİ ADI (bkz. backend.js
-   CLASS_NAME) — kova, takma ad yok.
-
-   Model on üç sınıf çıkarıyor ama burada üçü var: sahada aranan bunlar.
-   Ötekilerin (bus, truck, tractor, boar, cat…) kayıtları duruyor; sadece
-   tek tıkla süzülemiyorlar. Gerektiğinde bu diziye bir satır eklemek
-   yetiyor, başka hiçbir yeri değiştirmeden. */
-const CLASSES = [
-  { v: 'person', icon: '🚶', label: 'Person' },
-  { v: 'car', icon: '🚗', label: 'Car' },
-  { v: 'bicycle', icon: '🚲', label: 'Bicycle' },
-];
-
-/* Cinsiyet ve yaş satırlarında EMOJİ YOK: 🧒/🧑/🧓 küçük boyutta neredeyse
-   aynı görünüyor ve platforma göre değişiyor. Info rozetlerindeki çizimlerin
-   aynısı kullanılıyor — süzgeçte ve sonuçta aynı simge. */
-const GENDERS = [
-  { key: 'gender', v: 'Male', svg: genderIcon('Male'), label: 'Male' },
-  { key: 'gender', v: 'Female', svg: genderIcon('Female'), label: 'Female' },
-];
-
-const AGES = [
-  { key: 'age', v: 'Child', svg: ageIcon('Child'), label: 'Child' },
-  { key: 'age', v: 'Adult', svg: ageIcon('Adult'), label: 'Adult' },
-  { key: 'age', v: 'Senior', svg: ageIcon('Senior'), label: 'Senior' },
-];
-
-const EXTRAS = [
-  { key: 'Hat', v: 'Hat', icon: '🧢', label: 'Hat' },
-  { key: 'Backpack', v: 'Backpack', icon: '🎒', label: 'Backpack' },
-];
-
-/* Wireframe'deki 12 daire: 11 renk + "farketmez". Renk hem üst hem alt
-   giysiye bakıyor — model ikisini ayrı veriyor ama kullanıcı "üstü mü altı
-   mı" diye düşünmek zorunda kalmasın. */
-/* SIRA KULLANIM SIKLIĞINA GÖRE — tayf sırasına göre değil.
-   Kıyafet aramasında en çok tıklanan üç renk siyah, gri ve beyaz; onlar
-   listenin sonundayken her aramada en alt satıra bakmak gerekiyordu.
-   Nötrler başa alındı, renkliler koyudan açığa devam ediyor. */
-const COLORS = ['Black', 'Gray', 'White', 'Navy', 'Blue', 'SkyBlue',
-  'Green', 'Yellow', 'Orange', 'Red', 'Purple'];
-const COLOR_SWATCH = {
-  Red: '#ef4444', Orange: '#f97316', Yellow: '#eab308', Green: '#22c55e',
-  SkyBlue: '#38bdf8', Blue: '#3b82f6', Navy: '#1e3a8a', Purple: '#a855f7',
-  White: '#f8fafc', Gray: '#94a3b8', Black: '#1e293b',
 };
 
 export async function screenObjects(videoId, query) {
@@ -169,16 +117,35 @@ export async function screenObjects(videoId, query) {
   /** Görünen eksen saniyesi → okunur etiket. */
   const axLabel = (t) => (clock ? clock.clock(t) : hms(t));
 
-  /* --------------------------------------------------------------- durum -- */
-  /* Renk ataması ARAMADAN BAĞIMSIZ yaşıyor. `marks` rengi, `marked` de
-     nesnenin kendisini tutuyor — süzgeç değişip nesne listeden düşse bile
-     hem rengi hatırlansın hem timeline'daki şeridi kalsın. Kullanıcının
-     işaretlediği kişiler onun çalışma kümesi; süzgeç onları saklamamalı. */
-  const marks = new Map();     // object_id -> renk
+  /* --------------------------------------------------------------- durum --
+     KİMLİK ARTIK KALICI. Eskiden renk yalnızca bellekteydi ve sekme
+     kapanınca bütün eşleştirme uçuyordu; artık "bu ikisi aynı insan"
+     bilgisi backend'de object-linkage satırı olarak, rengi de
+     /settings/custom altında duruyor (bkz. identity.js).
+
+     `marked` yerinde kalıyor ama anlamı genişledi: ekranda tutulması
+     gereken nesnelerin YEREL KOPYASI. Süzgeç değişip nesne arama
+     sonucundan düşse bile şeridi timeline'da kalsın diye — ve artık
+     açılışta kayıtlı kimliklerin üyeleri de buraya çekiliyor. */
   const marked = new Map();    // object_id -> nesne
   let objects = [];            // son arama sonucu
   let selected = null;         // tıklanan nesne (Info paneli + vurgu)
-  let colorSeq = 0;
+  /** Kimlik kümesi — açılışta dolduruluyor, aşağıda hep `ids`. */
+  let ids = null;
+
+  /* Bu ekran tek gruba bakıyor, dolayısıyla kapsam da grup. Grubu olmayan
+     kayıtta linkage YAZILAMAZ (şema grup id'sini zorunlu istiyor); o
+     durumda kimlik yalnızca bu oturumda yaşıyor ve kullanıcı uyarılıyor. */
+  const gid = video.group_id != null ? String(video.group_id) : null;
+  /** Nesne → kimlik anahtarı. Track numaraları videoda 1'den başladığı için
+      video id'si anahtarın parçası; grup da öyle. */
+  const keyOf = (o) => idKey(gid || '0', o.video_id, o.track_id);
+  /** Nesnenin rengi — kendi rengi yoksa bağlı olduğu kişinin rengi. */
+  const colorOf = (o) => (ids ? ids.colorOf(keyOf(o)) : null);
+  /** "Person 3" — bu track bir kişiye bağlıysa. */
+  const personOf = (o) => (ids ? ids.labelOf(keyOf(o)) : null);
+  /** Kaç track renkli — başlıktaki sayaç için. */
+  const colouredCount = () => (ids ? ids.colors.size : 0);
   /* Kaç track tarandı — boş sonuçta bunu söylemek gerekiyor. "Hiçbir şey
      bulunamadı" ile "318 track tarandı, hiçbiri eşleşmedi" farklı bilgiler:
      ilki arayüzün bozuk olduğunu düşündürüyor. */
@@ -289,8 +256,21 @@ export async function screenObjects(videoId, query) {
   cmpStrip.style.display = 'none';
   const vwell = el('div.vwell', {}, vstack, segTag, vtags, cmpStrip);
 
+  /* YALNIZCA RENK temizleniyor, bağlantılar duruyor. Renk kalıcı olduğu için
+     bu düğme artık kaydedilmiş bir şeye dokunuyor; kimliği de silseydi tek
+     tıkla saatlerce yapılmış eşleştirme giderdi. Bağlantıyı kaldırmanın yolu
+     nesnenin kendi paletindeki Unlink düğmesi. */
   const btnClear = el('button.btn.sm.ghost', {
-    onclick: () => { marks.clear(); marked.clear(); colorSeq = 0; syncAll(); },
+    title: 'Removes the colours only — the person links stay.',
+    onclick: async () => {
+      /* Silme işini kimlik kümesi yapıyor: haritayı buradan boşaltmak
+         "değişti" bayrağını kaldırmıyordu, dolayısıyla `flush()` erken
+         dönüyor ve sunucuya hiçbir şey yazılmıyordu (bkz. identity.js
+         clearColors). */
+      if (!ids || !ids.clearColors()) return;
+      await ids.flush();
+      syncAll();
+    },
   }, 'Clear colours');
   // Ortak çubuk — bkz. ui.js playerControls(). Renk temizleme bu ekrana özel.
   const { node: ctl, btnPlay, scrub, tcode } = playerControls({
@@ -377,6 +357,12 @@ export async function screenObjects(videoId, query) {
     infoBody);
 
   const totalLbl = el('span', { class: 'tiny muted' }, '');
+  /* Kalıcı uyarı şeridi. Köşede bir saniyeliğine görünen bildirim, "yaptığın
+     iş kaydedilmeyecek" gibi bir cümle için yanlış yer: kullanıcı onu
+     kaçırdığında saatlerce çalışıp her şeyi kaybediyor. Başlığın altında
+     duruyor ve sayfadan çıkana kadar orada kalıyor. */
+  const banner = el('div.op-banner');
+  banner.style.display = 'none';
   mount(stage,
     el('div.hdr', {},
       el('div.hdr-top', {},
@@ -386,7 +372,8 @@ export async function screenObjects(videoId, query) {
           el('span.cur', {}, video.name),
           el('span.sep', {}, '›'),
           el('span.cur', {}, t('objects'))),
-        el('div.grow'), totalLbl)),
+        el('div.grow'), totalLbl),
+      banner),
     el('div.panel.op-player', {}, vwell, ctl), tlPanel, infoPanel);
 
   /* ------------------------------------------------------- sağ: nesneler -- */
@@ -396,96 +383,8 @@ export async function screenObjects(videoId, query) {
       el('span', { class: 'tiny muted' }, 'bestshot')),
     el('div.panel-b', {}, grid));
 
-  const search = buildSearch();
+  const search = buildSearch((sel) => loadObjects(sel));
   mount(rightbar, objPanel, search.node);
-
-  /* ========================================================== arama paneli */
-  function buildSearch() {
-    /* `sel.par` bir sözlük: { gender: 'Female', color: 'Black', … }.
-       Renk hem `upper` hem `lower` alanında aranacağı için anahtarsız
-       gidiyor; ötekiler kendi PAR anahtarıyla eşleşiyor. */
-    const sel = { cls: 'person', par: {} };
-
-    const toggle = (group, value) => {
-      if (sel.par[group] === value) delete sel.par[group];
-      else sel.par[group] = value;
-      paintSel();
-    };
-
-    const iconBtn = (item, group, tint) => {
-      const b = el('button.op-ico', {
-        title: item.label,
-        'data-group': group,
-        'data-v': item.v,
-        style: tint ? { color: tint } : {},
-        onclick: () => {
-          if (group === 'cls') { sel.cls = item.v; paintSel(); return; }
-          toggle(group, item.v);        // aynısına tekrar basmak kaldırır
-        },
-      }, item.svg ? null : item.icon);
-      // `svg` alanı yalnızca parchip.js'teki sabit şablonlardan geliyor.
-      if (item.svg) { b.innerHTML = item.svg; b.classList.add('svg'); }
-      return b;
-    };
-
-    const iconRow = (label, items, group, tinted) => el('div.op-arow', {},
-      el('div.op-alabel', {}, label),
-      el('div.op-avals', {},
-        items.map((i) => iconBtn(i, group, tinted ? i.tint : null))));
-
-    /* `.swgrid`: 6'şarlı iki satır. Akışa bırakılınca on ikinci daire
-       (siyah ya da "farketmez") tek başına üçüncü satıra düşüyordu. */
-    const colorRow = el('div.op-arow', {},
-      el('div.op-alabel', {}, 'Color'),
-      el('div.op-avals.swgrid', {},
-        COLORS.map((c) => el('button.op-sw', {
-          title: c,
-          'data-group': 'color', 'data-v': c,
-          style: { background: COLOR_SWATCH[c] },
-          onclick: () => toggle('color', c),
-        })),
-        el('button.op-sw.none', {
-          title: 'Any colour',
-          'data-group': 'color', 'data-v': '',
-          onclick: () => { delete sel.par.color; paintSel(); },
-        }, '✕')));
-
-    /** Seçili olan tam opak, ötekiler soluk — wireframe'deki "darker" kuralı. */
-    function paintSel() {
-      for (const b of node.querySelectorAll('[data-group]')) {
-        const g = b.dataset.group;
-        const v = b.dataset.v;
-        const on = g === 'cls'
-          ? sel.cls === v
-          : (v ? sel.par[g] === v : sel.par[g] === undefined);
-        b.classList.toggle('on', on);
-      }
-    }
-
-    const btn = el('button.btn.pri.wide', {
-      onclick: () => loadObjects(sel),
-    }, 'Search');
-
-    const node = el('div.panel.op-searchpanel', {},
-      el('div.panel-h', {}, 'search'),
-      el('div.panel-b.op-sbody', {},
-        iconRow('Class', CLASSES, 'cls'),
-        iconRow('Gender', GENDERS, 'gender', true),
-        colorRow,
-        iconRow('Age', AGES, 'age'),
-        iconRow('Accessory', EXTRAS, 'extra')),
-      el('div.op-sfoot', {}, btn));
-
-    paintSel();
-    /* `reset` boş durumdaki "Clear the filter" düğmesi için: sınıf seçimi
-       kalıyor, yalnızca PAR süzgeçleri kalkıyor — kullanıcı "person"
-       aramaya devam etmek istiyor, aramayı baştan kurmak değil. */
-    return {
-      node,
-      sel,
-      reset() { for (const k of Object.keys(sel.par)) delete sel.par[k]; paintSel(); },
-    };
-  }
 
   /* ============================================================ veri yükleme
      Backend'e giden tek çağrı. PAR etiketleri `par` dizisiyle gidiyor,
@@ -495,12 +394,7 @@ export async function screenObjects(videoId, query) {
        - gender/age → kendi PAR anahtarında aranır
        - color      → anahtarsız, yani upper VEYA lower'da
        - extra      → Hat / Backpack, boolean alanlar */
-    const par = [];
-    for (const [group, value] of Object.entries(sel.par)) {
-      if (group === 'color') par.push({ key: null, value });
-      else if (group === 'extra') par.push({ key: value, value });
-      else par.push({ key: group, value });
-    }
+    const par = parQuery(sel);
     /* Istek uzun surebiliyor (500 track + kirpim yollari). Bos izgara
        "bozuk" gorunuyordu; iskelet "geliyor" diyor. */
     renderSkeleton();
@@ -592,7 +486,8 @@ export async function screenObjects(videoId, query) {
       return;
     }
     for (const o of list) {
-      const mark = marks.get(o.id);
+      const mark = colorOf(o);
+      const person = personOf(o);
       const card = el('div.objcard', {
         /* `hot`: akış sürerken ızgara yeniden çiziliyor; sürüklenen hedefin
            vurgusu o tazelemede kaybolmasın. */
@@ -600,7 +495,7 @@ export async function screenObjects(videoId, query) {
           hotId === o.id ? 'hot' : ''].join(' ').trim(),
         // sürüklerken bu kartı bulup vurgulayabilmek için — bkz. hotCard()
         'data-oid': o.id,
-        title: `${o.label}\n${hms(o.t_first)}`
+        title: (person ? `${person}\n` : '') + `${o.label}\n${hms(o.t_first)}`
           + (o.has_range ? ` – ${hms(o.t_last)}` : '')
           + (o.conf != null ? `\nconf ${(o.conf * 100).toFixed(0)}%` : '')
           + (o.par_list.length
@@ -618,7 +513,8 @@ export async function screenObjects(videoId, query) {
         el('button.objdot', {
           class: mark ? 'on' : '',
           style: mark ? { background: mark, color: mark } : {},
-          title: mark ? `Colour ${mark} — click to change` : 'Assign a colour',
+          title: (person ? `${person} · ` : '')
+            + (mark ? `colour ${mark} — click to change` : 'assign a colour'),
           onclick: (e) => { e.stopPropagation(); openPalette(e.currentTarget, o); },
         }),
         el('div', { class: 'cap' },
@@ -643,7 +539,7 @@ export async function screenObjects(videoId, query) {
          panelindeki paletten seçer. */
       card.ondblclick = () => {
         clearTimeout(timer); timer = null;
-        setMark(o, marks.has(o.id) ? null : PALETTE[colorSeq++ % PALETTE.length]);
+        setMark(o, colorOf(o) ? null : ids.nextColor());
       };
       grid.append(card);
     }
@@ -706,9 +602,13 @@ export async function screenObjects(videoId, query) {
     closePalette();
     if (already) return;               // aynı noktaya tekrar basmak kapatır
 
-    const cur = marks.get(o.id);
+    const cur = colorOf(o);
+    const person = personOf(o);
     pop = el('div.op-pop', { 'data-for': o.id },
-      el('div.op-poph', {}, `#${o.track_id}`),
+      /* Başlıkta kişi adı: renk bir kişiye aitse onu değiştirmek o kişinin
+         BÜTÜN track'lerini etkiliyor — kullanıcı bunu görmeden seçmesin. */
+      el('div.op-poph', {},
+        person ? `${person} · #${o.track_id}` : `#${o.track_id}`),
       el('div.op-popsw', {},
         PALETTE.map((c) => el('button.op-sw', {
           class: cur === c ? 'on' : '',
@@ -719,7 +619,23 @@ export async function screenObjects(videoId, query) {
         el('button.op-sw.none', {
           class: cur ? '' : 'on', title: 'No colour',
           onclick: () => { setMark(o, null); closePalette(); },
-        }, '✕')));
+        }, '✕')),
+      /* Bağlantıyı bozmak renk vermekten AYRI bir eylem: kendi düğmesi var,
+         palete karışmıyor. Yalnızca bağlı track'lerde görünüyor. */
+      person
+        ? el('button.btn.sm.ghost.op-unlink', {
+          title: 'Removes this track from the person. Other tracks stay '
+            + 'linked only where they were linked directly.',
+          onclick: async () => {
+            closePalette();
+            try {
+              await ids.unlink(keyOf(o));
+              toast(`#${o.track_id} unlinked from ${person}`, 'ok', 2400);
+            } catch (e) { toast('Unlink failed: ' + e.message, 'err', 6000); }
+            syncAll();
+          },
+        }, `Unlink from ${person}`)
+        : null);
     document.body.append(pop);
 
     /* Konum: noktanın altına, ekranın dışına taşarsa içeri çekilerek. */
@@ -737,15 +653,24 @@ export async function screenObjects(videoId, query) {
     document.addEventListener('keydown', onEsc, true);
   }
 
+  /**
+   * Rengi değiştirir — KİMLİĞE DOKUNMAZ.
+   *
+   * Nesne bir kişiye bağlıysa renk o kişinin bütün track'lerine gidiyor
+   * (bkz. identity.js setColor). Yazma geciktirilip toplanıyor, yani palette
+   * gezinmek her tıklamada bir istek atmıyor.
+   */
   function setMark(o, color) {
-    if (color) { marks.set(o.id, color); marked.set(o.id, o); }
-    else { marks.delete(o.id); marked.delete(o.id); }
+    if (!ids) return;
+    ids.setColor(keyOf(o), color);
+    if (color) marked.set(o.id, o);
+    else if (!ids.has(keyOf(o))) marked.delete(o.id);
     if (selected && selected.id === o.id) showInfo(o);
     syncAll();
   }
 
   function showInfo(o) {
-    const mark = marks.get(o.id);
+    const mark = colorOf(o);
     const parText = o.par_exists
       ? Object.entries(o.attrs).map(([k, v]) => `${k}: ${v}`).join(' · ')
       : 'PAR did not run';
@@ -762,6 +687,12 @@ export async function screenObjects(videoId, query) {
       }),
       el('div.op-infomain', {},
         el('div.op-infoline', {},
+          /* Kişi adı en başta ve rengiyle: seçili nesnenin hangi kişiye
+             bağlandığı Info panelinin ilk okunan bilgisi olmalı. */
+          personOf(o)
+            ? el('b', { style: { color: mark || '#e8eef6' } },
+              `${personOf(o)} · `)
+            : null,
           el('b', {}, `#${o.track_id}`),
           ` ${o.class_name} · `,
           o.has_range
@@ -775,19 +706,65 @@ export async function screenObjects(videoId, query) {
         el('div.op-parrow', {}, parChips(o))),
       el('div.col', { style: { gap: '5px' } },
         el('button.btn.sm.ghost', {
+          title: 'Play from the moment this track first appears '
+            + `(${axLabel(A0(o))}).`,
           onclick: () => {
             seek(A0(o));
             if (videoEl) videoEl.play().catch(() => {});
           },
         }, '▶ From start'),
+        /* "Bestshot" analiz hattının terimi ve ekranda hiçbir yerde
+           açıklanmıyordu. Düğme artık NE YAPTIĞINI yazıyor: soldaki küçük
+           fotoğraf bir kareden kırpıldı, bu düğme o kareye gidiyor. Terimin
+           kendisi ipucunda duruyor ki backend belgesiyle eşleşsin. */
         o.bestshot != null && o.has_range
           ? el('button.btn.sm.ghost', {
-            title: 'Jump to the frame this crop was taken from',
+            title: 'Go to the frame this thumbnail was cut from — '
+              + `${hms(o.bestshot)} in the recording.\n`
+              + 'The analyser picks one frame per track as the clearest '
+              + 'view of it and calls that the "BestShot"; the crop you see '
+              + 'on the card and in the grid is that frame.',
             onclick: () => {
               seek(clock ? clock.wallSec(o.video_id, o.bestshot) : o.bestshot);
               if (videoEl) videoEl.play().catch(() => {});
             },
-          }, '◎ Bestshot')
+          }, '◎ This photo')
+          : null,
+        /* RENGİ KALDIRMANIN GÖRÜNÜR YOLU. Renk artık kalıcı — istendiği
+           gibi — ama kalıcı olan her şeyin geri alma düğmesi de olmalı ve
+           bu iş yalnızca paleti açıp `✕`e basmakla yapılabiliyordu.
+           `Clear colours` ise HEPSİNİ siliyor; burada silinen tek track.
+           Kimliğe dokunmuyor: kişi duruyor, yalnızca rengi gidiyor. */
+        mark
+          ? el('button.btn.sm.ghost', {
+            title: personOf(o)
+              ? `Removes the colour from ${personOf(o)}. The person link `
+                + 'stays — use Unlink for that.'
+              : 'Removes the colour from this track.',
+            onclick: () => setMark(o, null),
+          }, '○ Clear colour')
+          : null,
+        /* YANLIŞ BAĞLADIYSA GERİ ALACAĞI YER BURASI. Eskiden yalnızca
+           karttaki renk noktasına basıp paleti açınca görünüyordu; yanlış
+           eşleştirmeyi düzeltmek isteyen kullanıcı orayı bulamıyor ve kişi
+           kalıcı sanılıyordu. Seçili nesnenin panelinde, sürekli görünür. */
+        personOf(o)
+          ? el('button.btn.sm.ghost.op-unlinkbtn', {
+            title: `Removes #${o.track_id} from ${personOf(o)}. `
+              + 'The other tracks stay linked only where they were linked '
+              + 'directly to each other.',
+            onclick: async () => {
+              const who = personOf(o);
+              try {
+                await ids.unlink(keyOf(o));
+                toast(`#${o.track_id} unlinked from ${who}`, 'ok', 2600);
+              } catch (e) {
+                toast('Unlink failed: ' + e.message, 'err', 6000);
+              }
+              showInfo(o);
+              syncAll();
+            },
+          }, '⊘ Unlink')
           : null)));
 
     // PAR artık şeridin içinde rozet olarak; kapalı hâlde ek satır gerekmiyor.
@@ -795,7 +772,7 @@ export async function screenObjects(videoId, query) {
     infoBody.append(el('div.op-infomore', {},
       el('dl.kv', {},
         [['class_id', o.class_id],
-        ['bestshot', o.bestshot != null ? hms(o.bestshot) : '—'],
+        ['photo taken at', o.bestshot != null ? hms(o.bestshot) : '—'],
         ['confidence', o.conf != null ? (o.conf * 100).toFixed(1) + '%' : '—'],
         ['PAR', parText],
         ['PAR model', o.par_model || '—'],
@@ -853,7 +830,8 @@ export async function screenObjects(videoId, query) {
       }
       rows[r] = Math.max(rows[r], t1);
 
-      const mark = marks.get(o.id);
+      const mark = colorOf(o);
+      const person = personOf(o);
       const color = mark || CLASS_TINT[o.cls] || CLASS_TINT.other;
       /* Adayın sırası bilgi: akış en yakın/en benzer olandan başlıyor. */
       const rank = o.reid_rank ? `${o.reid_rank}. ` : '';
@@ -865,9 +843,12 @@ export async function screenObjects(videoId, query) {
         /* Timeline bu bayraga bakip renklendirilmis seridi parlatiyor,
            otekini soluk birakiyor. Renk vermenin tek amaci kalabalikta o
            kisiyi bulmakti; hepsi ayni agirlikta cizilince amac kayboluyordu. */
-        marked: !!mark,
-        type: marks.get(o.id) ? `#${o.track_id}` : (o.reid_rank ? rank : ''),
-        description: `${rank}${o.label} · ${axLabel(t0)}`
+        /* Bağlı olan da işaretli sayılıyor: rengi silinmiş ama kişiye
+           bağlanmış bir track soluk çizilirse eşleştirme görünmez olurdu. */
+        marked: !!(mark || person),
+        type: person || (mark ? `#${o.track_id}` : (o.reid_rank ? rank : '')),
+        description: `${rank}${person ? person + ' · ' : ''}${o.label}`
+          + ` · ${axLabel(t0)}`
           + (o.has_range ? ` – ${axLabel(A1(o))}` : '')
           + (o.reid_score != null
             ? ` · match ${(o.reid_score * 100).toFixed(0)}%` : '')
@@ -894,12 +875,16 @@ export async function screenObjects(videoId, query) {
     if (reid) {
       /* Re-ID'de sayı arama sonucunu değil akışı anlatmalı. */
       markCount.textContent = `${reid.got} candidate`
-        + `${reid.got === 1 ? '' : 's'} · ${marks.size} coloured`;
+        + `${reid.got === 1 ? '' : 's'} · ${colouredCount()} coloured`;
     } else {
       const extra = [...marked.keys()].filter(
         (id) => !objects.some((o) => o.id === id)).length;
-      markCount.textContent = objects.length || marks.size
-        ? `${objects.length} objects · ${marks.size} coloured`
+      /* Kişi sayısı ayrı bir bilgi: kaç track boyandığı değil, kaç KİŞİ
+         kurulduğu işin sonucu. */
+      const people = ids ? ids.people().length : 0;
+      markCount.textContent = objects.length || colouredCount() || people
+        ? `${objects.length} objects · ${colouredCount()} coloured`
+          + (people ? ` · ${people} linked` : '')
           + (extra ? ` (+${extra} kept from earlier search)` : '')
         : '';
     }
@@ -921,7 +906,8 @@ export async function screenObjects(videoId, query) {
       overlay.filterTrackIds = null;
       overlay.colorOf = new Map([...marked.values()]
         .filter((o) => !clock || String(o.video_id) === activeId)
-        .map((o) => [o.track_id, marks.get(o.id)]));
+        .map((o) => [o.track_id, colorOf(o)])
+        .filter(([, c]) => !!c));
       overlay.draw(localT());
     }
     renderGrid();
@@ -1026,9 +1012,13 @@ export async function screenObjects(videoId, query) {
     if (overlay) overlay.highlightTrackId = act.length ? act[0].track_id : null;
     if (act.length) {
       const o = act[0];
-      segTag.textContent = `#${o.track_id} ${o.class_name} · ${axLabel(A0(o))}`;
+      /* Kişi adı varsa BAŞTA: rozete bakan kişi önce "kim", sonra "hangi
+         track" bilmek istiyor. Bağlanmamış track'te eskisi gibi yalnızca
+         numara yazıyor. */
+      segTag.textContent = (personOf(o) ? `${personOf(o)} · ` : '')
+        + `#${o.track_id} ${o.class_name} · ${axLabel(A0(o))}`;
       segTag.style.display = '';
-      segTag.style.background = marks.get(o.id) || PREVIEW_COLOR;
+      segTag.style.background = colorOf(o) || PREVIEW_COLOR;
     } else {
       segTag.style.display = 'none';
     }
@@ -1050,8 +1040,9 @@ export async function screenObjects(videoId, query) {
     }
   }
 
-  /** Paletten sıradaki renk. İlk tık kırmızı — wireframe'deki sıra bu. */
-  const nextColor = () => PALETTE[colorSeq++ % PALETTE.length];
+  /** Sıradaki KULLANILMAMIŞ renk — kimlik kümesi hangilerinin dolu olduğunu
+      zaten biliyor, palet sırası oradan geliyor (bkz. identity.js). */
+  const nextColor = () => (ids ? ids.nextColor() : PALETTE[0]);
 
   /* ---------------------------------------------------------- şerit tıkı --
      native: renksizse renk alsın, sonra normal seçim (video oraya gitsin).
@@ -1067,7 +1058,7 @@ export async function screenObjects(videoId, query) {
     /* Renksizken tıklamak RENK VERİR ve seçer. `pickObject` aynı nesneye
        ikinci tıkta seçimi kaldırıyor; yeni renklenmiş bir şeridi hemen
        kapatmasın diye o yol atlanıyor. */
-    if (!marks.has(o.id)) {
+    if (!colorOf(o)) {
       setMark(o, nextColor());
       selected = o;
       showInfo(o);
@@ -1084,15 +1075,26 @@ export async function screenObjects(videoId, query) {
      yapılacak tek şey hedefin rengini ötekine vermek — çizgi kayboluyor,
      geriye ikisinin ortak rengi kalıyor. Kaynak renksizse (re-id'de aday
      adaya bağlanabilir) sıradaki renk ikisine birden gidiyor. */
-  function onLink(fromEv, toEv) {
+  async function onLink(fromEv, toEv) {
     const all = shown();
     const a = all.find((x) => x.id === fromEv.id);
     const b = all.find((x) => x.id === toEv.id);
-    if (!a || !b) return;
-    const col = marks.get(a.id) || nextColor();
-    if (!marks.has(a.id)) { marks.set(a.id, col); marked.set(a.id, a); }
-    setMark(b, col);
-    toast(`#${a.track_id} ↔ #${b.track_id} — same person`, 'ok', 2400);
+    if (!a || !b || !ids) return;
+    /* Ekran ÖNCE güncelleniyor: bağlantı `identity.js` içinde iyimser
+       yazılıyor, istek arkadan gidiyor. Sürüklemeyi bırakınca renk anında
+       yerine oturmalı — sunucuyu beklemek hareketi ağırlaştırırdı. */
+    marked.set(a.id, a);
+    marked.set(b.id, b);
+    try {
+      await ids.link(keyOf(a), keyOf(b));
+      const who = personOf(a) || 'the same person';
+      toast(`#${a.track_id} ↔ #${b.track_id} — ${who}`
+        + (ids.persists ? '' : ' (not saved: no video group)'),
+        ids.persists ? 'ok' : 'warn', ids.persists ? 2400 : 5000);
+    } catch (e) {
+      toast('Could not save the link: ' + e.message, 'err', 6000);
+    }
+    syncAll();
   }
 
   /* Sürüklerken hedefin üstüne gelmek onu OYNATIYOR. Wireframe'in kendi
@@ -1134,10 +1136,10 @@ export async function screenObjects(videoId, query) {
     }
     clear(cmpStrip);
     if (from) {
-      cmpStrip.append(cmpFace(from, marks.get(from.id)),
+      cmpStrip.append(cmpFace(from, colorOf(from)),
         el('span.op-cmparrow', {}, '→'));
     }
-    cmpStrip.append(cmpFace(to, marks.get(to.id)),
+    cmpStrip.append(cmpFace(to, colorOf(to)),
       el('span.op-cmphint', {}, 'aynı kişiyse bırak'));
     cmpStrip.style.display = '';
     hotCard(to);
@@ -1265,7 +1267,7 @@ export async function screenObjects(videoId, query) {
     const n = listed > shownN ? `${shownN}/${listed}` : `${shownN}`;
     clear(reidInfo);
     reidInfo.append(
-      el('b', { style: { color: marks.get(reid.target.id) || '#e8eef6' } },
+      el('b', { style: { color: colorOf(reid.target) || '#e8eef6' } },
         `#${reid.target.track_id}`),
       ` — ${n} candidate${listed === 1 ? '' : 's'} · `
         + (REID_ST[reid.status] || reid.status)
@@ -1282,7 +1284,8 @@ export async function screenObjects(videoId, query) {
         'warn', 5000);
     }
     stopReid(true);
-    if (!marks.has(o.id)) { marks.set(o.id, nextColor()); marked.set(o.id, o); }
+    if (!colorOf(o)) setMark(o, nextColor());
+    marked.set(o.id, o);
     reid = { target: o, cands: new Map(), rank: new Map(), status: 'running',
              got: 0, total: 0, dropped: 0, stream: null };
     reidBar.style.display = '';
@@ -1433,6 +1436,74 @@ export async function screenObjects(videoId, query) {
       + `/${clock.parts.length}`;
     partTag.style.display = '';
   }
+
+  /* ================================================ kimlikleri yükle =======
+     Arama sonucundan ÖNCE: renkler ve kişi etiketleri ilk çizimde yerinde
+     olsun, ekran önce renksiz çizilip sonra renklenmesin.
+
+     Kayıtlı bir kişinin üyeleri arama sonucunda olmayabilir (başka sınıf,
+     başka süzgeç, hatta grubun başka bir parçası). O track'leri tek tek
+     çözüp `marked` içine koyuyoruz — timeline'daki şeritleri açılışta
+     görünsün diye. Kişi başına birkaç istek; yüzlerce değil, çünkü yalnızca
+     BAĞLANMIŞ track'ler için yapılıyor. */
+  try {
+    ids = await loadIdentities(gid
+      ? { kind: 'group', id: gid, groupIds: [gid] }
+      : { kind: 'none' });
+  } catch (e) {
+    console.warn('[identity] yüklenemedi:', e.message);
+    ids = await loadIdentities({ kind: 'none' });
+    toast('Saved person links could not be loaded — '
+      + 'colours you set now may not persist.', 'warn', 6000);
+  }
+  onLeave(() => ids && ids.flush());
+  if (!ids.persists) {
+    clear(banner);
+    banner.append(
+      el('span.op-bannerico', {}, '⚠'),
+      el('span.grow', {},
+        el('b', {}, 'Nothing you link here will be saved. '),
+        'This recording is not in a video group, and a person link needs '
+        + 'one on both ends. Colours and links live only until you leave '
+        + 'this page. ',
+        /* DÜRÜST OL: backend'de videoyu sonradan bir gruba TAŞIYAN uç yok
+           (`PUT /video/{id}` yalnızca ad, açıklama, başlangıç saati ve konum
+           alıyor). Kullanıcıyı Manage'e yollamak, orada bulamayacağı bir
+           düğmeyi aratmak olurdu. */
+        'A recording cannot be moved into a group after upload, so the only '
+        + 'fix today is to upload it again under a group name.'),
+      el('button.btn.sm', {
+        onclick: () => { location.hash = '#/upload'; },
+      }, 'Go to Upload'));
+    banner.style.display = '';
+  }
+
+  /* Yüklenen kimliği KONSOLA yazıyoruz: "kaydettim ama ekranda yok"
+     durumunda bakılacak ilk yer burası — satır mı gelmedi, kapsam mı
+     eledi, yoksa çizim mi atladı, üçü ayrı sorun. */
+  console.info('[identity] yüklendi', {
+    kapsam: ids.scope, kalıcı: ids.persists,
+    satır: ids.rows.length, kişi: ids.people().length,
+    renk: ids.colors.size,
+    anahtarlar: ids.people().map((x) => `P${x.n}: ${x.members.join(' ')}`),
+  });
+
+  const memberKeys = ids.people().flatMap((p) => p.members);
+  if (memberKeys.length) {
+    const rows = await Promise.all(memberKeys.map(async (k) => {
+      const [, vid, tid] = k.split('/');
+      /* `trackObject` — `track` değil: şerit çizmek için aralık, kırpım ve
+         sınıf gerekiyor, ham ayrıntıda bunlar yok. */
+      try { return await api.trackObject(vid, tid); } catch { return null; }
+    }));
+    for (const o of rows) if (o) marked.set(o.id, o);
+  }
+
+  /* Arama sonucunu BEKLEMEDEN çiz: kayıtlı kişiler zaten elimizde ve
+     `loadObjects` saniyeler sürebiliyor (PAR istatistikleri + track listesi).
+     O süre boyunca timeline boş durursa kullanıcı işinin kaybolduğunu
+     sanıyor. */
+  syncAll();
 
   await loadObjects(search.sel);
   paint(cur());

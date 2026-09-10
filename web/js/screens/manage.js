@@ -5,6 +5,8 @@
    yalnızca okuma (GET) ve yükleme (POST) vardı; grup/video düzeltmek ya da
    silmek için Swagger'a gitmek gerekiyordu.
 
+     GET    /video/collections     POST   /video/collections
+     PUT    /video/groups/{id}/collection/{cid}
      GET    /video/groups          POST   /video/groups
      GET    /video/groups/{id}     PUT    /video/groups/{id}
      DELETE /video/groups/{id}
@@ -39,6 +41,8 @@ export async function screenManage() {
   const stage = el('div.stage');
   mount(ROOT(), topbar('manage'), el('div.main', {}, stage));
 
+  const colBody = el('div.panel-b');
+  const colCount = el('span', { class: 'tiny muted' }, '');
   const groupBody = el('div.panel-b');
   const videoBody = el('div.panel-b');
   const queueBody = el('div.panel-b');
@@ -48,6 +52,11 @@ export async function screenManage() {
 
   let sel = null;          // seçili grup id'si (null = hepsi)
   let poll = null;
+  /* Koleksiyonlar — gruplarin ustundeki katman. Birlikte incelenmek istenen
+     KAMERALARIN demeti; bir grup tek kameranin farkli saatlerdeki kayitlari.
+     Atama tek yonlu: backend'de koleksiyondan CIKARMA ucu yok, yalnizca
+     baska bir koleksiyona tasima var. */
+  let collections = [];
 
   mount(stage,
     el('div.hdr', {},
@@ -58,6 +67,11 @@ export async function screenManage() {
       el('div.hdr-sub', {},
         el('span', {}, 'Edit, delete and re-analyse groups and videos; '
           + 'watch the queue below. Deletion cannot be undone.'))),
+    el('div.panel.mg-cols', {},
+      el('div.panel-h', {}, 'Collections', el('span.grow'), colCount,
+        el('button.btn.sm.pri', { onclick: () => newCollection() },
+          '＋ New collection')),
+      colBody),
     el('div.panel.mg-groups', {},
       el('div.panel-h', {}, 'Groups', el('span.grow'), groupCount,
         el('button.btn.sm.pri', { onclick: () => newGroup() }, '＋ New group')),
@@ -73,8 +87,87 @@ export async function screenManage() {
   async function load() {
     const [r] = await Promise.all([api.groups(), drawQueue()]);
     store.set({ groups: r.groups });
+    /* Koleksiyon listesi grup listesinden SONRA: `api.collections()` grup
+       listesini de okuyup gruplari koleksiyonlara dagitiyor, iki cagriyi
+       paralel atmak ayni veriyi iki kez cekmek olurdu. */
+    try { collections = await api.collections(); }
+    catch (e) {
+      collections = [];
+      toast('Collections could not be read: ' + e.message, 'warn', 5000);
+    }
+    drawCollections();
     drawGroups(r.groups);
     drawVideos(r.groups);
+  }
+
+  /* ------------------------------------------------------- koleksiyonlar -- */
+  function drawCollections() {
+    colCount.textContent = `${collections.length} collection`;
+    clear(colBody);
+    const rows = collections.map((c) => el('tr', {},
+      el('td', { class: 'mono' }, c.id),
+      el('td', {}, el('b', {}, c.name)),
+      el('td', { class: 'muted' }, c.desc || '—'),
+      el('td', { class: 'num' }, String(c.groups.length)),
+      el('td', { class: 'tiny muted' },
+        c.groups.map((g) => g.name).join(', ') || '—')));
+    colBody.append(table(
+      ['id', 'name', 'description', 'groups', 'members'],
+      rows,
+      'No collections yet. A collection holds the video groups you want to '
+      + 'analyse together — different cameras of the same scene.'));
+  }
+
+  function newCollection() {
+    formModal('New collection', [
+      ['name', 'Name', ''],
+      ['description', 'Description', ''],
+    ], async (v) => {
+      if (!v.name.trim()) return toast('Name is required', 'warn');
+      await api.createCollection(v.name.trim(), v.description.trim());
+      toast('Collection created', 'ok');
+      await load();
+    });
+  }
+
+  /**
+   * Grubu bir koleksiyona koyar.
+   *
+   * Backend'de CIKARMA ucu yok — bir kez atanan grup ancak baska bir
+   * koleksiyona tasinabiliyor. Bunu kullaniciya soyluyoruz, cunku "geri
+   * alirim" diye dusunup atamak sonradan sikinti oluyor.
+   */
+  function assignCollection(g) {
+    if (!collections.length) {
+      return toast('Create a collection first.', 'warn', 4000);
+    }
+    const sel2 = el('select.input', {},
+      collections.map((c) => el('option', {
+        value: c.id, selected: String(g.collection_id) === String(c.id),
+      }, `${c.name}  (#${c.id})`)));
+    let close = () => {};
+    close = modal({
+      title: `Collection for "${g.name}"`,
+      body: el('div', { style: { display: 'grid', gap: '8px' } },
+        sel2,
+        el('div', { class: 'tiny muted' },
+          'A group belongs to one collection at a time. The backend has no '
+          + '"remove from collection" endpoint — you can only move it to '
+          + 'another collection later.')),
+      footer: [
+        el('button.btn.ghost', { onclick: () => close() }, 'Cancel'),
+        el('button.btn.pri', {
+          onclick: async () => {
+            close();
+            try {
+              await api.assignGroup(g.id, sel2.value);
+              toast(`"${g.name}" moved into the collection`, 'ok');
+              await load();
+            } catch (e) { toast('Failed: ' + e.message, 'err', 6000); }
+          },
+        }, 'Assign'),
+      ],
+    });
   }
 
   /* -------------------------------------------------------- analiz kuyruğu
@@ -156,25 +249,49 @@ export async function screenManage() {
   }
 
   /* ------------------------------------------------------------- gruplar - */
+  /** Koleksiyon id'si -> ad. Grup tablosunda ham id okunmuyor. */
+  function colName(id) {
+    if (id == null) return '—';
+    const c = collections.find((x) => String(x.id) === String(id));
+    return c ? c.name : `#${id}`;
+  }
+
   function drawGroups(groups) {
     groupCount.textContent = `${groups.length} group`;
     clear(groupBody);
-    const rows = groups.map((g) => el('tr', {
-      class: sel === g.id ? 'on' : '',
-      onclick: () => { sel = (sel === g.id ? null : g.id); drawGroups(groups); drawVideos(groups); },
-    },
-      el('td', { class: 'mono' }, g.id),
-      el('td', {}, el('b', {}, g.name)),
-      el('td', { class: 'muted' }, g.desc || '—'),
-      el('td', { class: 'num' }, String((g.cameras || []).length)),
-      el('td', { class: 'act' },
-        btn('Rename', () => editGroup(g)),
-        /* Grup silinince içindeki videolara ne olduğu backend'e bağlı —
-           kullanıcıya sayıyı gösterip kararı ona bırakıyoruz. */
-        btn('Delete', () => delGroup(g), 'danger'))));
+    const rows = groups.map((g) => {
+      /* `_` GERÇEK BİR GRUP DEĞİL: `backend.js groups()` hiçbir gruba ait
+         olmayan videoları toplasın diye uyduruyor. Backend'de karşılığı yok,
+         dolayısıyla üzerinde hiçbir yazma ucu çalışmıyor — atama denemesi
+         `PUT /video/groups/_/collection/2` diye gidip 422 dönüyordu.
+         Satırı gösteriyoruz (o videoların görünmesi gerekiyor) ama düğme
+         koymuyoruz; yapılacak şey videoyu bir gruba taşımak. */
+      const real = g.id !== '_';
+      return el('tr', {
+        class: sel === g.id ? 'on' : '',
+        onclick: () => {
+          sel = (sel === g.id ? null : g.id);
+          drawGroups(groups); drawVideos(groups);
+        },
+      },
+        el('td', { class: 'mono' }, real ? g.id : '—'),
+        el('td', {}, el('b', {}, g.name)),
+        el('td', { class: 'muted' },
+          real ? (g.desc || '—')
+            : 'Not a real group — these videos were uploaded without one.'),
+        el('td', { class: 'tiny' }, real ? colName(g.collection_id) : '—'),
+        el('td', { class: 'num' }, String((g.cameras || []).length)),
+        el('td', { class: 'act' },
+          real ? btn(g.collection_id ? 'Move' : 'Add to collection',
+            () => assignCollection(g)) : null,
+          real ? btn('Rename', () => editGroup(g)) : null,
+          /* Grup silinince içindeki videolara ne olduğu backend'e bağlı —
+             kullanıcıya sayıyı gösterip kararı ona bırakıyoruz. */
+          real ? btn('Delete', () => delGroup(g), 'danger') : null));
+    });
 
     groupBody.append(table(
-      ['id', 'name', 'description', 'videos', ''],
+      ['id', 'name', 'description', 'collection', 'videos', ''],
       rows,
       'No groups yet.'));
   }

@@ -572,52 +572,103 @@ export function treePanel(activeVideoId, onPick) {
     return row;
   }
 
+  /**
+   * Gruplari koleksiyonlarina gore bolumler.
+   *
+   * Koleksiyon YENI ve istege bagli: bir grup hicbir koleksiyonda olmayabilir.
+   * Bu yuzden basliklar ancak gercekten koleksiyon varsa ciziliyor — hicbiri
+   * yoksa agac eskisi gibi duz bir grup listesi olarak kaliyor ve
+   * kullanicinin alistigi gorunum degismiyor.
+   */
+  function sections(list) {
+    const cols = store.get('collections') || [];
+    if (!cols.length) return [{ col: null, groups: list }];
+    const byCol = new Map(cols.map((c) => [String(c.id), []]));
+    const loose = [];
+    for (const g of list) {
+      const k = g.collection_id == null ? null : String(g.collection_id);
+      if (k != null && byCol.has(k)) byCol.get(k).push(g);
+      else loose.push(g);
+    }
+    const out = cols
+      .filter((c) => byCol.get(String(c.id)).length)
+      .map((c) => ({ col: c, groups: byCol.get(String(c.id)) }));
+    /* Koleksiyonsuz gruplar EN ALTTA ve basliksiz degil: "Ungrouped" diye
+       yaziyor, yoksa koleksiyon basliklarindan sonra gelen gruplar son
+       koleksiyona aitmis gibi okunuyor. */
+    if (loose.length) out.push({ col: { id: '_', name: 'Ungrouped' }, groups: loose });
+    return out;
+  }
+
   function render(q = '') {
     lastQ = q;
     clear(body);
     const tree = el('div.tree');
-    for (const g of groups) {
-      const cams = g.cameras.filter(c =>
-        !q || c.name.toLowerCase().includes(q) ||
-        (c.place_ko || '').includes(q) || g.name.toLowerCase().includes(q));
-      if (q && !cams.length) continue;
-      const ch = chainOf(cams);
-      const shown = ch ? 1 + ch.rest.length : cams.length;
-      const isOpen = open.includes(g.id) || !!q;
-      const gh = el('div.tree-group', { class: isOpen ? 'open' : '' },
-        el('span.caret', {}, '▶'),
-        el('span', {}, '📁'),
-        el('span.grow', {}, g.name),
-        el('span.gsub', {}, `${shown}`));
-      gh.onclick = () => {
-        const i = open.indexOf(g.id);
-        i >= 0 ? open.splice(i, 1) : open.push(g.id);
-        localStorage.setItem('treeopen', JSON.stringify(open));
-        render(q);
-      };
-      tree.append(gh);
-      if (g.name_ko) {
-        gh.title = `${g.name} · ${g.name_ko}\n${g.desc || ''}`;
+    for (const sec of sections(groups)) {
+      if (sec.col) {
+        const real = sec.col.id !== '_';
+        /* Başlık artık tıklanabilir: koleksiyon ekranına girmenin yolu
+           burası. Sekme çubuğuna koymadık — koleksiyon her zaman var olan
+           bir şey değil, ağaçta ise ancak gerçekten varsa görünüyor. */
+        tree.append(el('div.tree-col', {
+          class: real ? 'click' : '',
+          title: real
+            ? `Collection #${sec.col.id}`
+              + (sec.col.desc ? ` — ${sec.col.desc}` : '')
+              + '\nOpen all of its groups on one timeline'
+            : 'Groups that are not in any collection',
+          onclick: real
+            ? () => { location.hash = `#/collection/${sec.col.id}`; }
+            : null,
+        },
+          el('span', {}, real ? '🗂' : '·'),
+          el('span.grow', {}, sec.col.name),
+          real ? el('span.gsub', {}, `${sec.groups.length} ▸`)
+            : el('span.gsub', {}, String(sec.groups.length))));
       }
-      if (!isOpen) continue;
+      for (const g of sec.groups) {
+        const cams = g.cameras.filter(c =>
+          !q || c.name.toLowerCase().includes(q) ||
+          (c.place_ko || '').includes(q) || g.name.toLowerCase().includes(q));
+        if (q && !cams.length) continue;
+        const ch = chainOf(cams);
+        const shown = ch ? 1 + ch.rest.length : cams.length;
+        const isOpen = open.includes(g.id) || !!q;
+        const gh = el('div.tree-group', { class: isOpen ? 'open' : '' },
+          el('span.caret', {}, '▶'),
+          el('span', {}, '📁'),
+          el('span.grow', {}, g.name),
+          el('span.gsub', {}, `${shown}`));
+        gh.onclick = () => {
+          const i = open.indexOf(g.id);
+          i >= 0 ? open.splice(i, 1) : open.push(g.id);
+          localStorage.setItem('treeopen', JSON.stringify(open));
+          render(q);
+        };
+        tree.append(gh);
+        if (g.name_ko) {
+          gh.title = `${g.name} · ${g.name_ko}\n${g.desc || ''}`;
+        }
+        if (!isOpen) continue;
 
-      const same = (c) => String(activeVideoId) === String(c.id);
-      /* İlerleme çubuğu satırın hemen ALTINDA kalmalı — hangi kaydın
-         analiz edildiği ancak öyle okunuyor. */
-      const prog = (c) => (c.status === 'analyzing'
-        ? tree.append(el('div.mini-prog', {},
-          el('i', { style: { width: (c.progress || 0) + '%' } })))
-        : null);
-      const putCam = (c) => { tree.append(camRow(c, same(c))); prog(c); };
+        const same = (c) => String(activeVideoId) === String(c.id);
+        /* İlerleme çubuğu satırın hemen ALTINDA kalmalı — hangi kaydın
+           analiz edildiği ancak öyle okunuyor. */
+        const prog = (c) => (c.status === 'analyzing'
+          ? tree.append(el('div.mini-prog', {},
+            el('i', { style: { width: (c.progress || 0) + '%' } })))
+          : null);
+        const putCam = (c) => { tree.append(camRow(c, same(c))); prog(c); };
 
-      if (ch) {
-        /* Hangi parçadaysa zincir satırı vurgulu — kullanıcı üçüncü parçayı
-           izlerken de listede kendini bulabilsin. */
-        tree.append(chainRow(ch, ch.parts.some(same)));
-        for (const c of ch.parts) prog(c);
-        for (const c of ch.rest) putCam(c);
-      } else {
-        for (const c of cams) putCam(c);
+        if (ch) {
+          /* Hangi parçadaysa zincir satırı vurgulu — kullanıcı üçüncü parçayı
+             izlerken de listede kendini bulabilsin. */
+          tree.append(chainRow(ch, ch.parts.some(same)));
+          for (const c of ch.parts) prog(c);
+          for (const c of ch.rest) putCam(c);
+        } else {
+          for (const c of cams) putCam(c);
+        }
       }
     }
     body.append(tree);

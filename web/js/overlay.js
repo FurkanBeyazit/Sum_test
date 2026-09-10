@@ -76,9 +76,7 @@ export class VideoOverlay {
   destroy() {
     window.removeEventListener('resize', this._onResize);
     if (this._ro) this._ro.disconnect();
-    if (this._raf) cancelAnimationFrame(this._raf);
-    if (this._vfc && this.video && this.video.cancelVideoFrameCallback)
-      this.video.cancelVideoFrameCallback(this._vfc);
+    this.stop();
   }
 
   /**
@@ -144,8 +142,26 @@ export class VideoOverlay {
     return { ox: (ew - dw) / 2, oy: (eh - dh) / 2, dw, dh, vw, vh, scale };
   }
 
-  /** Oynatma döngüsü — kare hassas. */
+  /** Çizim döngüsünü durdurur. `start()` bunu kendi çağırıyor. */
+  stop() {
+    if (this._raf) { cancelAnimationFrame(this._raf); this._raf = null; }
+    if (this._vfc && this.video && this.video.cancelVideoFrameCallback) {
+      this.video.cancelVideoFrameCallback(this._vfc);
+      this._vfc = null;
+    }
+  }
+
+  /**
+   * Oynatma döngüsü — kare hassas.
+   *
+   * TEKRAR ÇAĞRILABİLİR ve çağrılmalı: `videoEl.load()` medyayı sıfırlıyor
+   * ve bekleyen `requestVideoFrameCallback` kaydını da düşürüyor. Kayıt
+   * yalnızca geri çağrının İÇİNDE yenilendiği için bir daha hiç tetiklenmiyor
+   * — yani kaynak değiştiren ekranlarda kutular ilk videodan sonra donuyordu.
+   * Önce varsa eski döngü kapatılıyor, böylece iki döngü üst üste binmiyor.
+   */
   start() {
+    this.stop();
     const v = this.video;
     if (v && v.requestVideoFrameCallback) {
       const step = (now, meta) => {

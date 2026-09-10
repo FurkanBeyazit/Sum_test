@@ -16,6 +16,7 @@ import { screenHome } from './screens/home.js';
 import { screenUpload } from './screens/upload.js';
 import { screenSystem } from './screens/system.js';
 import { screenManage } from './screens/manage.js';
+import { screenCollection } from './screens/collection.js';
 
 async function route() {
   runCleanup();
@@ -35,6 +36,11 @@ async function route() {
     const g = await api.groups();
     store.set({ groups: g.groups });
     store.set({ attributes: await api.attributes() });
+    /* Koleksiyonlar agac panelinde baslik oluyor. Basarisiz olursa ekran
+       calismaya devam etsin: koleksiyon bir gruplama katmani, on kosul
+       degil. */
+    try { store.set({ collections: await api.collections() }); }
+    catch (e) { console.warn('[collections] okunamadi:', e.message); }
   }
 
   /* Adres çubuğundaki id silinmiş bir videoya ait olabilir (yer imi, eski
@@ -61,6 +67,11 @@ async function route() {
            `?reid=<track_id>` bağlantısı Object'i doğrudan Re-ID kipinde
            açıyor. */
         await screenObjects(p[1], q); break;
+      /* Koleksiyon: birden çok grubu tek eksende gösteren ekran.
+         `?mode=objects` doğrudan nesne kipinde açıyor. */
+      case 'collection':
+        if (!p[1]) { location.hash = '#/home'; return; }
+        await screenCollection(p[1], q); break;
       case 'home': await screenHome(); break;
       case 'upload': await screenUpload(); break;
       // Jobs, Manage ekranina tasindi — eski yer imleri kirilmasin

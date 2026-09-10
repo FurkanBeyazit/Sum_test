@@ -42,7 +42,7 @@ import {
  * ekleniyor demektir; kullanıcının kastı da bu (aynı yere aynı adı yazdı).
  * Sessizce yapmıyoruz, bildirim çıkıyor.
  */
-async function ensureGroup(name) {
+async function ensureGroup(name, collectionId) {
   const want = name.trim().toLowerCase();
   const find = async () => {
     const r = await api.groups();
@@ -50,13 +50,26 @@ async function ensureGroup(name) {
       (g) => String(g.name || '').trim().toLowerCase() === want);
   };
 
+  /* Koleksiyona atama AYRI bir adim ve basarisiz olmasi yuklemeyi
+     bozmamali: dosyalar zaten grupta, koleksiyon yalnizca bir gruplama
+     katmani. Hata bildiriliyor, akis devam ediyor. */
+  const putIn = async (gid) => {
+    if (!collectionId) return gid;
+    try { await api.assignGroup(gid, collectionId); }
+    catch (e) { toast('Could not add the group to the collection: '
+      + e.message, 'warn', 6000); }
+    return gid;
+  };
+
   const hit = await find();
   if (hit) {
     toast(`Using existing group "${hit.name}" · id ${hit.id}`, 'ok', 5000);
-    return hit.id;
+    return putIn(hit.id);
   }
   try {
-    const g = await api.createGroup(name.trim());
+    /* Koleksiyon id'si dogrudan olusturma cagrisinda gidiyor — ayri bir PUT
+       gerekmiyor, yaris da olmuyor. */
+    const g = await api.createGroup(name.trim(), '', collectionId || null);
     toast(`Group created · id ${g.id}`, 'ok');
     return g.id;
   } catch (e) {
@@ -65,7 +78,7 @@ async function ensureGroup(name) {
       const again = await find();
       if (again) {
         toast(`Using existing group "${again.name}" · id ${again.id}`, 'ok');
-        return again.id;
+        return putIn(again.id);
       }
     }
     throw e;
@@ -77,6 +90,10 @@ async function refreshGroups() {
     api.invalidate();
     const g = await api.groups();
     store.set({ groups: g.groups });
+    /* Koleksiyonlar da tazeleniyor: yeni acilan koleksiyon agac panelinde
+       ancak store guncellenince baslik olarak gorunuyor. */
+    try { store.set({ collections: await api.collections() }); }
+    catch { /* koleksiyon zorunlu degil, agac onsuz da ciziliyor */ }
     return g.groups;
   } catch (e) {
     toast('Could not refresh the group list: ' + e.message, 'warn');
@@ -102,7 +119,13 @@ async function waitForVideoReady(videoId, tries = 6, delayMs = 1200) {
 }
 
 const UP = {
-  collName: '',
+  /* GRUP adi — koleksiyon degil. Eskiden bu alan "Collection Name" diye
+     etiketliydi ve `ensureGroup` ile bir video GRUBU yaratiyordu; backend'de
+     gercek bir collection kavrami olmadigi icin ikisi ayni seydi. Artik
+     ayrilar: grup tek kameranin kayitlari, koleksiyon o gruplarin demeti. */
+  groupName: '',
+  /* Hangi koleksiyona girecek. Bos = hicbirine (koleksiyon istege bagli). */
+  collectionId: '',
   groupId: null,
   items: [],      // {key,file,name,startAt,durationMs,videoId,state,progress,meta}
   sel: 0,
@@ -913,7 +936,7 @@ export async function screenUpload() {
   async function doMergeUpload() {
     const todo = UP.items.filter((i) => i.state === 'pending');
     if (!todo.length) return toast('No new files to upload', 'warn');
-    if (!UP.collName.trim()) return toast('Enter a collection name', 'warn');
+    if (!UP.groupName.trim()) return toast('Enter a group name', 'warn');
     if (todo.length !== UP.items.length) {
       return toast('Merge processes all files at once — clear the list and '
         + 'add them again', 'warn', 6000);
@@ -975,7 +998,9 @@ export async function screenUpload() {
       const meta = await api.mergeBuild(mid, segments);
       for (const w of meta.warnings || []) toast(w, 'warn', 7000);
 
-      if (!UP.groupId) UP.groupId = await ensureGroup(UP.collName);
+      if (!UP.groupId) {
+        UP.groupId = await ensureGroup(UP.groupName, UP.collectionId);
+      }
       phase = 'upload';
       const key = `merged-${Date.now()}`;
       const res = await api.reserve(UP.groupId, [key]);
@@ -983,10 +1008,10 @@ export async function screenUpload() {
 
       const v = await api.mergeUpload(mid, {
         video_id: videoId,
-        name: UP.collName.trim(),
+        name: UP.groupName.trim(),
         description: UP.items.map((i) => i.meta).filter(Boolean).join('\n'),
         start_at: startAt ? startAt.toISOString() : null,
-        filename: `${UP.collName.trim() || 'merged'}.mp4`,
+        filename: `${UP.groupName.trim() || 'merged'}.mp4`,
       });
 
       UP.mergedId = videoId;
@@ -1026,7 +1051,7 @@ export async function screenUpload() {
   async function doPartsUpload() {
     const todo = UP.items.filter((i) => i.state === 'pending');
     if (!todo.length) return toast('No new files to upload', 'warn');
-    if (!UP.collName.trim()) return toast('Enter a collection name', 'warn');
+    if (!UP.groupName.trim()) return toast('Enter a group name', 'warn');
     if (todo.some((i) => !i.startAt)) {
       return toast('Every clip needs a start time — set it on the timeline',
         'warn', 6000);
@@ -1034,7 +1059,9 @@ export async function screenUpload() {
 
     const ordered = [...todo].sort((a, b) => a.startAt - b.startAt);
     try {
-      if (!UP.groupId) UP.groupId = await ensureGroup(UP.collName);
+      if (!UP.groupId) {
+        UP.groupId = await ensureGroup(UP.groupName, UP.collectionId);
+      }
 
       for (const it of ordered) {
         it.state = 'uploading'; it.progress = 0; drawList();
@@ -1095,10 +1122,12 @@ export async function screenUpload() {
     }
     const todo = UP.items.filter((i) => i.state === 'pending');
     if (!todo.length) return toast('No new files to upload', 'warn');
-    if (!UP.collName.trim()) return toast('Enter a collection name', 'warn');
+    if (!UP.groupName.trim()) return toast('Enter a group name', 'warn');
 
     try {
-      if (!UP.groupId) UP.groupId = await ensureGroup(UP.collName);
+      if (!UP.groupId) {
+        UP.groupId = await ensureGroup(UP.groupName, UP.collectionId);
+      }
       const res = await api.reserve(UP.groupId, todo.map((i) => i.key));
       const byKey = new Map(res.map((r) => [r.client_key, r]));
 
@@ -1137,7 +1166,7 @@ export async function screenUpload() {
     /* Birleştirilmişse tek bir video_id var — her parça için ayrı ayrı
        analiz kuyruğa almak 409 yağmuru üretirdi. */
     const ready = UP.mergedId
-      ? [{ videoId: UP.mergedId, name: UP.collName.trim() || 'merged' }]
+      ? [{ videoId: UP.mergedId, name: UP.groupName.trim() || 'merged' }]
       : UP.items.filter((i) => i.state === 'done' && i.videoId);
     if (!ready.length) return toast('Upload the files first', 'warn');
     let queued = 0;
@@ -1164,6 +1193,71 @@ export async function screenUpload() {
     onchange: (e) => { addFiles([...e.target.files]); e.target.value = ''; },
   });
 
+  /* ---- koleksiyon secici ------------------------------------------------
+     Koleksiyon ISTEGE BAGLI: bos birakilan grup hicbir koleksiyona girmiyor
+     ve her sey eskisi gibi calisiyor. Ama koleksiyon, aynı sahnenin farkli
+     kameralarini tek zaman ekseninde karsilastirmanin ON KOSULU — bu yuzden
+     yeni koleksiyon acmak icin baska bir ekrana gitmek gerekmesin diye
+     "＋ New collection…" secenegi listenin icinde duruyor. */
+  const colSel = el('select.input', {
+    style: { maxWidth: '210px' },
+    title: 'Optional — put this group into a collection so it can be '
+      + 'compared with other cameras.',
+    onchange: async (e) => {
+      if (e.target.value !== '__new') { UP.collectionId = e.target.value; return; }
+      e.target.value = UP.collectionId;      // secim geri alinsin
+      newCollection();
+    },
+  });
+
+  /* Ekranin geri kalani `modal()` kullaniyor; tarayicinin `prompt`u burada
+     tek basina kalirdi. */
+  function newCollection() {
+    const input = el('input.input', { placeholder: 'Collection name' });
+    let close = () => {};
+    const save = async () => {
+      const name = input.value.trim();
+      if (!name) return toast('Name is required', 'warn');
+      close();
+      try {
+        const c = await api.createCollection(name, '');
+        UP.collectionId = String(c.id);
+        await fillCollections();
+        toast(`Collection "${c.name}" created`, 'ok');
+      } catch (err) {
+        toast('Could not create the collection: ' + err.message, 'err', 6000);
+      }
+    };
+    input.onkeydown = (e) => { if (e.key === 'Enter') save(); };
+    close = modal({
+      title: 'New collection',
+      body: el('div', { style: { display: 'grid', gap: '8px' } },
+        input,
+        el('div', { class: 'tiny muted' },
+          'A collection holds the camera groups you want to analyse '
+          + 'together on one timeline.')),
+      footer: [
+        el('button.btn.ghost', { onclick: () => close() }, 'Cancel'),
+        el('button.btn.pri', { onclick: save }, 'Create'),
+      ],
+    });
+    setTimeout(() => input.focus(), 30);
+  }
+
+  async function fillCollections() {
+    let cols = [];
+    try { cols = await api.collections(); }
+    catch (e) { console.warn('[collections] okunamadi:', e.message); }
+    clear(colSel);
+    colSel.append(
+      el('option', { value: '' }, 'No collection'),
+      ...cols.map((c) => el('option', {
+        value: c.id, selected: String(UP.collectionId) === String(c.id),
+      }, c.name)),
+      el('option', { value: '__new' }, '＋ New collection…'));
+  }
+  fillCollections();
+
   const drop = el('div.updrop', {
     ondragover: (e) => { e.preventDefault(); drop.classList.add('over'); },
     ondragleave: () => drop.classList.remove('over'),
@@ -1185,12 +1279,16 @@ export async function screenUpload() {
       el('div.panel-b', { style: { display: 'grid', gap: '12px' } },
         el('div.row', { style: { gap: '8px' } },
           el('span', { class: 'tiny muted', style: { width: '110px' } },
-            'Collection Name'),
+            'Group Name'),
           el('input.input', {
-            placeholder: 'e.g. Gwangmyeong Stn · 2026-08-13',
-            value: UP.collName,
-            oninput: (e) => { UP.collName = e.target.value; },
+            /* Bir GRUP = bir kameranin kayitlari. Yer artik ornekte degil
+               etikette anlatiliyor, cunku ayni yerin iki kamerasi iki AYRI
+               grup olmali ve tek bir koleksiyonda bulusmali. */
+            placeholder: 'one camera · e.g. Gwangmyeong Stn — Gate 3',
+            value: UP.groupName,
+            oninput: (e) => { UP.groupName = e.target.value; },
           }),
+          colSel,
           el('button.btn.sm', { onclick: () => fileInput.click() }, '+ Add files'),
           /* Sürükleyerek bozulan sırayı tek tıkla toparlar; otomatik dizilim
              kapandıysa yeniden açar. */

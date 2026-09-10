@@ -63,7 +63,8 @@ const cache = { proxy: null, videos: null, results: new Map(),
                 /* video_id → Map(track_id → class_id). Tek track ayrıntısı
                    sınıf döndürmüyor; liste ucu döndürüyor. Video başına bir
                    kez çekip burada tutuyoruz. */
-                classes: new Map() };
+                classes: new Map(),
+                collections: null };
 
 /* BBox penceresi (saniye) — tek istekte cekilebilecek en uzun aralik.
    Iki ayri tavan bunu dusuk tutmayi gerektiriyor:
@@ -73,6 +74,33 @@ const cache = { proxy: null, videos: null, results: new Map(),
        sessizce VERI KAYBETTIRIYOR — kalan sure bos gelir.
    Gercek pencereleme bboxfeed.js'te ve 20 saniye; burasi yalnizca ust sinir. */
 const BBOX_WINDOW = 60;
+
+/**
+ * /settings/custom adresini kapsama gore kurar.
+ *
+ * Dort kapsam var ve yalnizca 'key' olani anahtari GOVDEDE tasiyor; digerleri
+ * adreste id tasiyor. Bu farki tek yerde tutmak, cagiran koda yansimasin diye.
+ */
+function settingPath(scope, id) {
+  if (scope === 'collection') return `/settings/custom/collections/${id}`;
+  if (scope === 'group') return `/settings/custom/groups/${id}`;
+  if (scope === 'video') return `/settings/custom/videos/${id}`;
+  return `/settings/custom/${encodeURIComponent(id)}`;
+}
+
+/**
+ * Anahtar kapsaminin YAZMA adresi okuma adresinden FARKLI.
+ *
+ *   GET/DELETE  /settings/custom/{setting_key}      -> anahtar ADRESTE
+ *   PUT         /settings/custom                    -> anahtar GOVDEDE
+ *
+ * Kapsamli uclarda (collection/group/video) boyle bir ayrim yok, uc de ayni
+ * adrese yaziyor. Bu farki gormezden gelmek PUT'u okuma adresine gonderiyor
+ * ve o adreste PUT tanimli olmadigi icin istek sessizce reddediliyordu.
+ */
+function settingWritePath(scope, id) {
+  return scope === 'key' ? '/settings/custom' : settingPath(scope, id);
+}
 
 /**
  * Ornekleme frekansini VERININ KENDISINDEN cikarir.
@@ -674,6 +702,10 @@ export const backendApi = {
     }
     const out = (groups || []).map((g, i) => ({
       id: String(g.id),
+      /* Grubun bagli oldugu koleksiyon (null olabilir). Koleksiyon ekrani
+         gruplari buradan topluyor; agac paneli de bunu kullanip gruplari
+         koleksiyon basliklari altina koyuyor. */
+      collection_id: g.collection_id == null ? null : String(g.collection_id),
       name: g.name,
       name_ko: g.name,
       desc: g.description || '',
@@ -748,6 +780,7 @@ export const backendApi = {
   deleteGroup: async (id) => {
     const r = await req(`/video/groups/${id}`, { method: 'DELETE' });
     cache.videos = null;
+    cache.collections = null;
     return r;
   },
 
@@ -761,11 +794,142 @@ export const backendApi = {
     return r;
   },
 
-  createGroup: (name, description) => req('/video/groups', {
+  createGroup: (name, description, collectionId) => {
+    const body = new URLSearchParams({ name, description: description || '' });
+    if (collectionId != null && collectionId !== '') {
+      body.set('collection_id', String(collectionId));
+    }
+    cache.collections = null;
+    return req('/video/groups', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+  },
+
+  /* ==================================================== koleksiyonlar ======
+     Koleksiyon, video GRUBUNUN ustundeki katman: bir grup tek kameranin
+     farkli saatlerdeki kayitlari, koleksiyon ise BIRLIKTE incelenmek istenen
+     gruplarin (yani farkli kameralarin) demeti.
+
+     Backend gruplari koleksiyonla birlikte donduruyor (`collection_id`), ama
+     koleksiyonun icindekileri veren bir uc YOK. Bu yuzden birlestirmeyi
+     burada yapiyoruz: koleksiyon listesi + grup listesi -> her koleksiyonun
+     kendi gruplari. Ekran kodu bu ayrimi hic gormuyor.
+  */
+  collections: async () => {
+    /* Onbellek: koleksiyon listesi neredeyse hic degismiyor ama her ekran
+       acilisinda okunuyor ve `groups()` ile birlikte iki istek demek.
+       Yazma uclarinin hepsi bunu sifirliyor. */
+    if (cache.collections) return cache.collections;
+    const [cols, cat] = await Promise.all([
+      req('/video/collections'), backendApi.groups(),
+    ]);
+    const byCol = new Map();
+    for (const g of cat.groups) {
+      if (g.collection_id == null) continue;
+      if (!byCol.has(g.collection_id)) byCol.set(g.collection_id, []);
+      byCol.get(g.collection_id).push(g);
+    }
+    cache.collections = (cols || []).map((c) => ({
+      id: String(c.id),
+      name: c.name,
+      desc: c.description || '',
+      created_at: c.created_at,
+      groups: byCol.get(String(c.id)) || [],
+    }));
+    return cache.collections;
+  },
+
+  createCollection: async (name, description) => {
+    const r = await req('/video/collections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ name, description: description || '' }),
+    });
+    cache.collections = null;
+    return r;
+  },
+
+  /** Grubu koleksiyona tasir. Ayni uc tasima ve ilk atama icin kullaniliyor. */
+  assignGroup: async (groupId, collectionId) => {
+    const r = await req(`/video/groups/${groupId}/collection/${collectionId}`,
+      { method: 'PUT' });
+    cache.videos = null;
+    cache.collections = null;
+    return r;
+  },
+
+  /* ================================================ nesne baglantilari =====
+     POST/GET/DELETE /video/object-linkages
+
+     Uc yalnizca CIFT sakliyor: (grup,video,track) <-> (grup,video,track).
+     Ne renk var ne kisi kimligi. "Ayni insan" kavrami bu ciftlerin
+     olusturdugu grafigin BAGLI BILESENI olarak istemcide cikiyor
+     (bkz. identity.js). Burasi yalnizca satirlari tasiyor.
+
+     Listeleme ucunun suzgeci yok: butun satirlar geliyor, kapsam suzmesi
+     identity.js icinde yapiliyor.
+  */
+  linkages: () => req('/video/object-linkages'),
+
+  /**
+   * @param {object} a {groupId, videoId, trackId}
+   * @param {object} b ayni sekil
+   * @param {?number|string} collectionId ikisinin ortak koleksiyonu (olabilir null)
+   */
+  createLinkage: (a, b, collectionId) => req('/video/object-linkages', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ name, description: description || '' }),
+    headers: { 'Content-Type': 'application/json' },
+    /* Alan adlari rakamla basliyor ('1st_group_id') — backend'in semasi boyle,
+       degistiremeyiz. JS tarafinda tirnak icinde yaziliyor. */
+    body: JSON.stringify({
+      collection_id: collectionId == null ? null : Number(collectionId),
+      '1st_group_id': Number(a.groupId),
+      '1st_video_id': Number(a.videoId),
+      '1st_track_id': Number(a.trackId),
+      '2nd_group_id': Number(b.groupId),
+      '2nd_video_id': Number(b.videoId),
+      '2nd_track_id': Number(b.trackId),
+    }),
   }),
+
+  deleteLinkage: (id) =>
+    req(`/video/object-linkages/${id}`, { method: 'DELETE' }),
+
+  /* ==================================================== front ayarlari =====
+     /settings/custom — backend'in bize ayirdigi serbest JSON alani.
+     Kapsam dort turlu: anahtarla (genel), koleksiyon, grup, video.
+
+     Burada ne saklaniyor: RENK. Kisi kimligi object-linkages'ta duruyor ve
+     orasi rengi bilmiyor; renk ise yalnizca calisirken isimize yarayan bir
+     isaret. Ikisini ayri tutmanin bedeli iki istek, kazanci ise rengin
+     kaybolmasinin kimligi bozmamasi.
+
+     404 = "henuz yazilmadi", hata degil. `settingGet` bu durumda null donuyor
+     ki cagiran her yerde try/catch yazmak zorunda kalmasin.
+  */
+  settingGet: async (scope, id) => {
+    try {
+      const r = await req(settingPath(scope, id));
+      return (r && r.config) || null;
+    } catch (e) {
+      if (e.status === 404) return null;
+      throw e;
+    }
+  },
+
+  settingPut: (scope, id, config) => req(settingWritePath(scope, id), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    /* Anahtar kapsaminda setting_key GOVDEDE, digerlerinde ADRESTE. */
+    body: JSON.stringify(scope === 'key'
+      ? { setting_key: String(id), config: config || {} }
+      : { config: config || {} }),
+  }),
+
+  settingDelete: (scope, id) =>
+    req(settingPath(scope, id), { method: 'DELETE' }),
 
   reserve: (groupId, clientKeys) => req('/video/reservations', {
     method: 'POST',
@@ -1182,9 +1346,22 @@ export const backendApi = {
      rütbe de o listedeki konumdan geliyor. Çağıran taraf farkı kendisi alıyor
      (yeni gelenleri çözüyor, eskilerin rütbesini güncelliyor).
   */
-  reidStream(groupId, videoId, trackId, cb = {}) {
-    const url = `${LIVE}/analysis/result/groups/${groupId}`
-      + `/video/${videoId}/track/${trackId}/reid/stream`;
+  /**
+   * @param {object} opts `{collectionId}` verilirse arama KOLEKSIYON
+   *   kapsaminda yapilir: hedefle ayni koleksiyondaki butun gruplarin
+   *   track'leri karsilastirilir. Verilmezse eski davranis (tek grup).
+   */
+  reidStream(groupId, videoId, trackId, cb = {}, opts = {}) {
+    /* DIKKAT — adresteki eksik bolu isareti KASITLI.
+       Backend'in OpenAPI semasi bu yolu tam olarak soyle ilan ediyor:
+         /analysis/result/collections/{collection_id}groups/{group_id}/...
+       Yani `{collection_id}` ile `groups` arasinda bolu YOK. Duzeltip
+       yazarsak 404 aliriz. Backend duzeltince buradaki tek satir degisir. */
+    const url = opts.collectionId != null
+      ? `${LIVE}/analysis/result/collections/${opts.collectionId}`
+        + `groups/${groupId}/video/${videoId}/track/${trackId}/reid/stream`
+      : `${LIVE}/analysis/result/groups/${groupId}`
+        + `/video/${videoId}/track/${trackId}/reid/stream`;
     const ctrl = new AbortController();
     /* NL: gerçek satır sonu (tek karakter). ESC: sunucunun yazdığı
        İKİ karakterlik kaçış dizisi — ters bölü ve n. */
@@ -1470,6 +1647,7 @@ export const backendApi = {
     }
     else { cache.results.delete(String(id)); cache.par.delete(String(id)); }
     cache.videos = null;
+    cache.collections = null;
   },
 
   job: async (id) => req(`/analysis/${String(id).replace(/^Q/, '')}`),

@@ -26,8 +26,10 @@ export async function screenHome() {
     el('div.panel-h', {}, 'How to Use'),
     el('div.panel-b', { style: { display: 'grid', gap: '14px' } },
       ...[
-        ['1', 'Create a collection',
-         'Open Upload & Analysis and name the collection.'],
+        ['1', 'Name the group',
+         'Open Upload & Analysis and name the group — one group is one '
+         + 'camera. Optionally put it in a collection so several cameras '
+         + 'can be compared on one timeline.'],
         ['2', 'Add recordings',
          'Drag video files in. Segments from one camera are chained in order.'],
         ['3', 'Set the start time',

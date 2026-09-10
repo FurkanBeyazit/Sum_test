@@ -9,6 +9,21 @@
    İki mod:
      mode:'single' → tek video, olay blokları + playhead
      mode:'multi'  → kamera başına satır, kameralar arası bağlantı çizgileri
+
+   ÜÇÜNCÜ KATMAN: BAND
+   -------------------
+   Koleksiyon ekranı aynı eksende BİRDEN ÇOK video grubu gösteriyor. Her grup
+   kendi şeritlerini istiyor ve üç grup × altı şerit = ekranın yarısı; video
+   için yer kalmıyor.
+
+   Çözüm: grup bir BAND. Band kapalıyken TEK satır — arkada yoğunluk şeridi
+   ("burada kaç nesne var"), üstünde yalnızca işaretlenmiş/bağlanmış kişiler.
+   Üstüne gelince o band açılıyor, altındakiler aşağı itiliyor, fare çıkınca
+   geri kapanıyor. Aranan kişi her zaman görünür kalıyor, kalabalık ise ancak
+   istendiğinde geliyor.
+
+   `bands` verilmezse HİÇBİR ŞEY DEĞİŞMİYOR: yerleşim eskisi gibi düz bir
+   şerit listesi. Tek video ekranları bu katmanı hiç görmüyor.
    ========================================================================= */
 
 import { pad, roughDur } from './core.js';
@@ -23,6 +38,12 @@ const SPAN_H = 17;
    yok" başka bir bilgi türü, kendi rengini hak ediyor. */
 const GAP_COL = '#f59e0b';
 const LANE_LABEL_W = 96;
+/* Band başlığı — grup adı, saat aralığı ve açık/kapalı işareti. Şerit
+   yüksekliğinden alçak: başlık satırı veri taşımıyor, yer kaplamamalı. */
+const BAND_H = 20;
+/* Band etiketleri şeritlerden daha geniş bir alan istiyor: grup adı
+   "Gwangmyeong Stn — Gate 3" gibi uzun olabiliyor. */
+const BAND_LABEL_W = 128;
 
 export class Timeline {
   constructor(canvas, opts = {}) {
@@ -53,6 +74,26 @@ export class Timeline {
     this.heat = null;         // [{t0,t1,score,candidate}] — aday구간 skorları
     this.heatThreshold = null;
     this.tracks = null;       // [{t0,t1,laneId,color,label}] — takip vurgusu
+    /* Band listesi — verilirse yerleşim bandlı olur (bkz. `_layout`).
+       [{ id, label, sub, color, lanes:[lane], events:[] }] */
+    this.bands = null;
+    /* Hangi band açık. Tek seferde bir tane: ikisi birden açıkken ekran
+       yine dolup taşıyor ve "geçici açılım" olmaktan çıkıyor. */
+    this._openBand = null;
+    /* Yerleşim tablosu — `_layout()` üretiyor. Çizim ve isabet testi
+       ikisi de buradan okuyor, yani ikisi ASLA ayrışamıyor. Eskiden y
+       hesabı iki ayrı yerde tekrarlanıyordu. */
+    this._rows = [];
+    this._contentH = 0;
+    this.onBandHover = opts.onBandHover || null;   // (bandId|null) => void
+    /* Band başlığındaki oynat düğmesi. Hover ile devir "bakınırken" doğru
+       davranış ama niyetli bir seçim değil: fare çıkınca geri dönüyor.
+       Kullanıcının "şimdi BU kamerayı izleyeceğim" demesi için ayrı bir
+       tıklama gerekiyor. */
+    this.onBandPlay = opts.onBandPlay || null;     // (bandId) => void
+    /* Hangi bandın oynadığı — düğme o bandda duraklat şeklinde çiziliyor. */
+    this.playingBand = null;
+    this.paused = true;
     this.onSeek = opts.onSeek || null;
     this.onPickEvent = opts.onPickEvent || null;
     /* ---------------------------------------------------------- bağlama ---
@@ -66,6 +107,12 @@ export class Timeline {
     /* (hedef|null, kaynak) — kaynağı da veriyoruz: ekranda "kimden kime"
        gösterilebilsin. Sürükleme sırasında asıl soru bu. */
     this.onHoverEvent = opts.onHoverEvent || null;
+    /* SÜRÜKLEMESİZ hover. `onHoverEvent` yalnızca bağlama sürüklemesi
+       sırasında ateşleniyor — orada niyet bellidir ve video hedefe atlar.
+       Bu ise sadece "farenin altında ne var" bilgisi: ekran kırpımı ve
+       ayrıntıyı gösteriyor, oynatıcıya DOKUNMUYOR. İkisini tek geri çağrıya
+       sıkıştırmak, çubukta gezinirken videoyu durmadan zıplatırdı. */
+    this.onHoverBar = opts.onHoverBar || null;     // (ev|null) => void
     this.activeEventId = null;
     this.hover = null;
     this._drag = null;
@@ -79,7 +126,15 @@ export class Timeline {
     this._onUp = () => this._up();
     window.addEventListener('mouseup', this._onUp);
     canvas.addEventListener('mouseleave', () => {
+      if (this.hover && this.onHoverBar) this.onHoverBar(null);
       this.hover = null;
+      /* Açık band kapansın: açılım GEÇİCİ, fare çıkınca ekran eski
+         yüksekliğine dönmeli. Sürükleme sürerken kapatmıyoruz — imleç
+         tuvalin dışına taşıp geri gelebiliyor ve hedef kaybolmamalı. */
+      if (this.bands && this._openBand && !this.link) {
+        this.expandBand(null);
+        if (this.onBandHover) this.onBandHover(null);
+      }
       /* Sürükleme sürüyorsa iptal etme — imleç geri gelebilir. Sadece
          hedefi düşür ki tuval dışında bırakmak yanlışlıkla bağlamasın;
          karşılaştırma şeridi de kapansın, yoksa ekranda asılı kalıyor. */
@@ -99,9 +154,20 @@ export class Timeline {
     window.removeEventListener('mouseup', this._onUp);
   }
 
-  setData({ lanes, total, startIso, heat, tracks, heatThreshold, gaps, spans }) {
+  setData({ lanes, bands, total, startIso, heat, tracks, heatThreshold,
+    gaps, spans }) {
     if (heatThreshold !== undefined) this.heatThreshold = heatThreshold;
-    if (lanes) this.lanes = lanes;
+    /* Band verildiğinde `lanes` ondan TÜRETİLİYOR, ayrıca gönderilmiyor:
+       iki listeyi elle senkron tutmak zorunda kalırsak biri eskiyor ve
+       takip vurgusu (`tracks`) olmayan bir şeridi arıyor. */
+    if (bands !== undefined) {
+      this.bands = bands;
+      if (bands) this.lanes = bands.flatMap((b) => b.lanes || []);
+      if (this._openBand && !bands.some((b) => b.id === this._openBand)) {
+        this._openBand = null;
+      }
+    }
+    if (lanes && !this.bands) this.lanes = lanes;
     if (total !== undefined) { this.total = total; }
     if (startIso !== undefined) this.startIso = startIso;
     if (gaps !== undefined) this.gaps = gaps;
@@ -121,6 +187,74 @@ export class Timeline {
     this.resize();
   }
 
+  /* ---------------------------------------------------------- yerleşim ---
+     Satırların dikey yeri TEK YERDE hesaplanıyor. Çizim (`draw`) ve isabet
+     testi (`_pick`) ikisi de bu tablodan okuyor; ayrı ayrı hesaplanırsa
+     band açılıp kapandıkça tıklanan yer ile görünen yer kayıyor. */
+  _layout() {
+    this._rows = [];
+    let y = this.lanesY;
+    if (!this.bands) {
+      for (const lane of this.lanes) {
+        this._rows.push({ kind: 'lane', lane, y, h: ROW_H });
+        y += ROW_H;
+      }
+    } else {
+      for (const b of this.bands) {
+        this._rows.push({ kind: 'band', band: b, y, h: BAND_H });
+        y += BAND_H;
+        if (this._openBand === b.id) {
+          const list = (b.lanes && b.lanes.length) ? b.lanes
+            : [{ id: `${b.id}:empty`, label: '', events: [] }];
+          for (const lane of list) {
+            this._rows.push({ kind: 'lane', lane, band: b, y, h: ROW_H });
+            y += ROW_H;
+          }
+        } else {
+          /* Kapalı band TEK satır. İçindeki şerit gerçek bir şerit değil,
+             yalnızca İŞARETLİ olayları taşıyan bir özet — kalabalık arkadaki
+             yoğunluk şeridinde sayı olarak duruyor (bkz. `_drawDensity`). */
+          this._rows.push({
+            kind: 'lane', lane: this._collapsedLane(b), band: b,
+            y, h: ROW_H, dense: true,
+          });
+          y += ROW_H;
+        }
+      }
+    }
+    this._contentH = y + 10;
+  }
+
+  /**
+   * Kapalı band için özet şerit.
+   *
+   * Yalnızca `marked` olaylar geçiyor: kullanıcının bağladığı ya da
+   * renklendirdiği kişiler. Onlar kapalıyken de görünmeli — takip edilen şey
+   * zaten o. Gerisi yoğunluk şeridinde toplu olarak duruyor.
+   */
+  _collapsedLane(b) {
+    if (!b._collapsedLane || b._collapsedSrc !== b.lanes) {
+      b._collapsedSrc = b.lanes;
+      b._collapsedLane = {
+        id: `${b.id}:collapsed`,
+        label: '',
+        events: (b.lanes || []).flatMap((l) => l.events || [])
+          .filter((e) => e.marked),
+      };
+    }
+    return b._collapsedLane;
+  }
+
+  /** Açık bandın kimliği — çağıran ekran şerit sayısını buna göre veriyor. */
+  get openBand() { return this._openBand; }
+
+  /** Bandı geçici olarak aç. `null` hepsini kapatır. */
+  expandBand(id) {
+    if (this._openBand === id) return;
+    this._openBand = id;
+    this.resize();      // yükseklik değişti — resize kendi draw'ını yapıyor
+  }
+
   fit() {
     this.t0 = 0;
     this.t1 = this.total || 1;
@@ -138,7 +272,10 @@ export class Timeline {
   get lanesY() { return this.hh; }
 
   height() {
-    return this.lanesY + Math.max(1, this.lanes.length) * ROW_H + 10;
+    this._layout();
+    return this.bands
+      ? Math.max(this.lanesY + ROW_H + 10, this._contentH)
+      : this.lanesY + Math.max(1, this.lanes.length) * ROW_H + 10;
   }
 
   resize() {
@@ -154,7 +291,10 @@ export class Timeline {
   }
 
   /* ------------------------------------------------- koordinat dönüşümü -- */
-  get plotX() { return this.mode === 'multi' ? LANE_LABEL_W : 0; }
+  get plotX() {
+    if (this.bands) return BAND_LABEL_W;
+    return this.mode === 'multi' ? LANE_LABEL_W : 0;
+  }
   get plotW() { return Math.max(10, this._w - this.plotX - 4); }
   X(t) { return this.plotX + (t - this.t0) / (this.t1 - this.t0) * this.plotW; }
   T(x) { return this.t0 + (x - this.plotX) / this.plotW * (this.t1 - this.t0); }
@@ -301,12 +441,30 @@ export class Timeline {
     }
 
     // --- satırlar ---------------------------------------------------------
-    const LY = this.lanesY;
-    this.lanes.forEach((lane, i) => {
-      const y = LY + i * ROW_H;
-      if (i % 2 === 0) { c.fillStyle = '#0d131b'; c.fillRect(0, y, W, ROW_H); }
+    let zebra = 0;
+    this._rows.forEach((row) => {
+      if (row.kind === 'band') { this._drawBandHead(c, row, W); return; }
+      const lane = row.lane;
+      const y = row.y;
+      if (zebra++ % 2 === 0) {
+        c.fillStyle = '#0d131b'; c.fillRect(0, y, W, ROW_H);
+      }
+      /* Kapalı bandın arkasındaki yoğunluk şeridi: "burada kaç nesne var"
+         sorusunu tek satırda cevaplıyor. İşaretli olaylar bunun ÜSTÜNE
+         çiziliyor, yani kalabalık zemin, aranan kişi ön plan. */
+      if (row.dense) this._drawDensity(c, row.band, y);
 
-      if (this.mode === 'multi') {
+      if (this.bands) {
+        /* Açık bandın şeritleri girintili: hangi banda ait oldukları
+           soldaki boşluktan okunuyor, her satıra grup adı yazmaya gerek yok. */
+        c.strokeStyle = row.band && this._openBand === row.band.id
+          ? (row.band.color || '#334155') : '#18222f';
+        c.lineWidth = 2;
+        c.beginPath();
+        c.moveTo(BAND_LABEL_W - 8.5, y);
+        c.lineTo(BAND_LABEL_W - 8.5, y + ROW_H);
+        c.stroke();
+      } else if (this.mode === 'multi') {
         c.fillStyle = '#10161f';
         c.fillRect(0, y, LANE_LABEL_W, ROW_H);
         c.strokeStyle = '#18222f';
@@ -366,7 +524,7 @@ export class Timeline {
       }
 
       // takip vurgusu (Re-ID)
-      if (this.tracks) {
+      if (this.tracks) {  // eslint-disable-line no-lone-blocks
         for (const tr of this.tracks) {
           if (tr.laneId !== lane.id) continue;
           if (tr.t1 < this.t0 || tr.t0 > this.t1) continue;
@@ -419,6 +577,116 @@ export class Timeline {
       c.fillStyle = '#38bdf8';
       c.fillRect(bx + bw * (this.t0 / this.total), by,
         Math.max(2, bw * (span / this.total)), 5);
+    }
+  }
+
+  /**
+   * Band başlığı — grubun adı, saat aralığı ve açık/kapalı işareti.
+   *
+   * Solda dar bir sütunda duruyor; sağ taraf boş kalmıyor, orada bandın
+   * KENDİ kayıt aralıkları çiziliyor. Böylece band kapalıyken bile "bu kamera
+   * saat kaçtan kaça kayıt yapmış" görünüyor — koleksiyonda kameraların
+   * çakıştığı aralığı bulmanın tek yolu bu.
+   */
+  _drawBandHead(c, row, W) {
+    const b = row.band, y = row.y;
+    const open = this._openBand === b.id;
+    const col = b.color || '#64748b';
+    const playing = this.playingBand === b.id;
+
+    c.fillStyle = open ? '#121a24' : '#0c1219';
+    c.fillRect(0, y, W, BAND_H);
+    c.strokeStyle = '#18222f';
+    c.beginPath(); c.moveTo(0, y + .5); c.lineTo(W, y + .5); c.stroke();
+
+    // sol: renk çubuğu + oynat düğmesi + ad
+    c.fillStyle = col;
+    c.fillRect(0, y + 3, 3, BAND_H - 6);
+
+    /* Oynat düğmesi. Yeri satırın SOLUNDA ve sabit: her bandda aynı x'te
+       durunca göz onu aramıyor, doğrudan buluyor. Dikdörtgeni satıra
+       yazılıyor ki isabet testi çizimle aynı sayıyı kullansın. */
+    const bx = 6, bw = 15;
+    row.play = { x: bx, y: y + 3, w: bw, h: BAND_H - 6 };
+    c.fillStyle = playing ? col : 'rgba(255,255,255,.06)';
+    this._rr(c, bx, y + 3, bw, BAND_H - 6, 3);
+    c.fill();
+    c.fillStyle = playing ? '#04121b' : '#c8d4e2';
+    const cx = bx + bw / 2, cy = y + BAND_H / 2;
+    if (playing && !this.paused) {
+      c.fillRect(cx - 3, cy - 4, 2.5, 8);
+      c.fillRect(cx + 0.5, cy - 4, 2.5, 8);
+    } else {
+      c.beginPath();
+      c.moveTo(cx - 2.5, cy - 4.5);
+      c.lineTo(cx + 4, cy);
+      c.lineTo(cx - 2.5, cy + 4.5);
+      c.closePath(); c.fill();
+    }
+
+    c.save();
+    const lx = bx + bw + 6;
+    c.beginPath(); c.rect(lx, y, BAND_LABEL_W - lx - 6, BAND_H); c.clip();
+    c.font = `${open ? 700 : 600} 10.5px "Malgun Gothic", sans-serif`;
+    c.fillStyle = open ? '#e8eef6' : '#a9b8c9';
+    c.textBaseline = 'middle';
+    c.fillText(`${open ? '▾' : '▸'} ${b.label}`, lx, y + BAND_H / 2);
+    c.restore();
+
+    /* Sağ: bandın kayıt aralıkları. İnce bir çizgi — başlık satırı bu; asıl
+       şeritlerle karışacak kadar kalın olmamalı. */
+    for (const sp of b.spans || []) {
+      if (sp.t1 < this.t0 || sp.t0 > this.t1) continue;
+      const x = this.X(sp.t0);
+      const w = Math.max(2, this.X(sp.t1) - x);
+      c.fillStyle = open ? 'rgba(125,211,252,.30)' : 'rgba(125,211,252,.16)';
+      c.fillRect(x, y + BAND_H / 2 - 2, w, 4);
+    }
+    if (b.sub) {
+      c.font = '9px ui-monospace, Consolas, monospace';
+      c.fillStyle = '#526375';
+      c.textAlign = 'right';
+      c.fillText(b.sub, W - 6, y + BAND_H / 2);
+      c.textAlign = 'left';
+    }
+  }
+
+  /**
+   * Kapalı bandın yoğunluk şeridi.
+   *
+   * Bandın BÜTÜN olayları zaman kovalarına dağıtılıp kova başına sayı olarak
+   * çiziliyor. Amaç tek tek nesneleri göstermek değil — kapalı bir satırda
+   * zaten okunmazlar; amaç "burası kalabalık, burası boş" bilgisini vermek,
+   * yani hangi bandı açmaya değeceğini söylemek.
+   */
+  _drawDensity(c, b, y) {
+    if (!b) return;
+    const N = Math.max(24, Math.floor(this.plotW / 4));
+    const bins = new Float32Array(N);
+    let max = 0;
+    const span = this.t1 - this.t0;
+    for (const lane of b.lanes || []) {
+      for (const e of lane.events || []) {
+        if (e.t_end < this.t0 || e.t_start > this.t1) continue;
+        const a = Math.max(0, Math.floor((e.t_start - this.t0) / span * N));
+        const z = Math.min(N - 1, Math.floor((e.t_end - this.t0) / span * N));
+        for (let i = a; i <= z; i++) {
+          bins[i] += 1;
+          if (bins[i] > max) max = bins[i];
+        }
+      }
+    }
+    if (!max) return;
+    const bw = this.plotW / N;
+    const h = ROW_H - 10;
+    for (let i = 0; i < N; i++) {
+      if (!bins[i]) continue;
+      /* Karekök ölçek: tek bir yoğun an bütün şeridi doyurup gerisini
+         görünmez yapmasın. */
+      const v = Math.sqrt(bins[i] / max);
+      c.fillStyle = `rgba(100,116,139,${0.18 + 0.42 * v})`;
+      const bh = Math.max(2, h * v);
+      c.fillRect(this.plotX + i * bw, y + 5 + (h - bh), Math.ceil(bw), bh);
     }
   }
 
@@ -626,22 +894,45 @@ export class Timeline {
     const r = this.cv.getBoundingClientRect();
     return [e.clientX - r.left, e.clientY - r.top];
   }
+  /** Y koordinatındaki satır — çizimle AYNI tablodan. */
+  _rowAt(y) {
+    for (const r of this._rows) {
+      if (y >= r.y && y < r.y + r.h) return r;
+    }
+    return null;
+  }
+
   _pick(x, y) {
     if (y < this.lanesY) return null;
-    const i = Math.floor((y - this.lanesY) / ROW_H);
-    const lane = this.lanes[i];
-    if (!lane) return null;
-    const t = this.T(x);
+    const row = this._rowAt(y);
+    if (!row || row.kind !== 'lane') return null;
+    const lane = row.lane;
     for (const e of lane.events || []) {
       const ex = this.X(e.t_start), ew = Math.max(4, this.X(e.t_end) - ex);
-      if (x >= ex - 2 && x <= ex + ew + 2)
-        return { ...e, _y: this.lanesY + i * ROW_H + ROW_H / 2, _lane: lane };
+      if (x >= ex - 2 && x <= ex + ew + 2) {
+        return { ...e, _y: row.y + ROW_H / 2, _lane: lane, _band: row.band };
+      }
     }
     return null;
   }
   _down(e) {
     const [x, y] = this._pt(e);
     if (e.shiftKey || e.button === 1) { this._drag = { x, t0: this.t0, t1: this.t1 }; return; }
+    /* Band başlığı: oynat düğmesi mi, yoksa şeridin boş yeri mi. Başlık
+       satırında olay yok, bu yüzden `_pick`ten ÖNCE bakılıyor. */
+    const row = this._rowAt(y);
+    if (row && row.kind === 'band') {
+      const r = row.play;
+      if (r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
+        if (this.onBandPlay) this.onBandPlay(row.band.id);
+        return;
+      }
+      /* Başlığın sağ tarafı eksen: oraya tıklamak zamana gitsin. */
+      if (x > this.plotX && this.onSeek) {
+        this.onSeek(Math.max(0, Math.min(this.total, this.T(x))));
+      }
+      return;
+    }
     const hit = this._pick(x, y);
     /* Şeride basıldı: tık mı sürükleme mi henüz belli değil. Karar `_move`
        içinde eşiği geçince veriliyor — eskiden basar basmaz `onPickEvent`
@@ -685,6 +976,22 @@ export class Timeline {
       this.draw();
       return;
     }
+    /* ÜSTÜNE GELİNEN BAND AÇILIR.
+       Sürükleme SIRASINDA da açılıyor: kullanıcının anlattığı akış tam olarak
+       bu — birinden sürükleyip öteki grubun üstüne gelince oranın nesneleri
+       çıksın ve hedef seçilebilsin. Açılım imlecin ALTINDAKİ satırları aşağı
+       ittiği için hedef kaymıyor: band başlığı yerinde kalıyor, şeritler
+       onun altında açılıyor.
+       Tek istisna kaydırma (pan): orada eksen zaten hareket ediyor, bir de
+       satırlar zıplarsa hiçbir şey takip edilemiyor. */
+    if (this.bands && !this._drag) {
+      const row = this._rowAt(y);
+      const id = row && row.band ? row.band.id : null;
+      if (id !== this._openBand) {
+        this.expandBand(id);
+        if (this.onBandHover) this.onBandHover(id);
+      }
+    }
     /* Eşiği geçen hareket = bağlama sürüklemesi. 4 piksel: elin titremesi
        tıkı sürüklemeye çevirmesin, ama niyetli bir hareket hemen anlaşılsın. */
     if (this._pending && !this.link && this.onLinkEvent) {
@@ -709,7 +1016,12 @@ export class Timeline {
     const hit = this._pick(x, y);
     const changed = (hit && hit.id) !== (this.hover && this.hover.id);
     this.hover = hit;
-    this.cv.style.cursor = hit ? 'pointer' : (x > this.plotX ? 'crosshair' : 'default');
+    if (changed && this.onHoverBar) this.onHoverBar(hit);
+    const hr = this._rowAt(y);
+    const onPlay = hr && hr.kind === 'band' && hr.play
+      && x >= hr.play.x && x <= hr.play.x + hr.play.w;
+    this.cv.style.cursor = (hit || onPlay) ? 'pointer'
+      : (x > this.plotX ? 'crosshair' : 'default');
     if (changed || hit) this.draw();
   }
   _wheel(e) {
