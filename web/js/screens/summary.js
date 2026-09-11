@@ -144,7 +144,7 @@ export async function screenSummary(collectionId) {
       kind: 'collection', id: String(col.id), groupIds,
     });
   } catch (e) {
-    console.warn('[wall] kimlikler yüklenemedi:', e.message);
+    console.warn('[summary] kimlikler yüklenemedi:', e.message);
     ids = await loadIdentities({ kind: 'none' });
   }
   /* Bu ekran renk YAZMIYOR; flush yine de çağrılıyor ki bir gün yazan bir
@@ -188,6 +188,9 @@ export async function screenSummary(collectionId) {
       renderSummary();
     },
   }, '0 quiet');
+  /* Sayı gelene kadar görünmüyor: ilk saniyede "0 quiet" yazan bir düğme
+     hem yanlış (henüz sayılmadı) hem de gereksiz. */
+  quietBtn.style.display = 'none';
 
   const panel = el('div.panel.su-panel', {},
     el('div.panel-h', {}, 'People across cameras',
@@ -255,14 +258,24 @@ export async function screenSummary(collectionId) {
      Grup grup, SIRAYLA. Her grup bitince kendi sütunu doluyor — kullanıcı
      ikinci grubu beklemeden birincisini görüyor. Hepsini birden istemek
      backend'i de tarayıcıyı da tıkıyordu (bkz. collection.js loadBand). */
+
+  /* Yükleme ekran ömrüyle sınırlı. Ekran işlevi bu döngüyü BEKLEMİYOR
+     (kullanıcı ilk sütunu hemen görsün diye); dolayısıyla kullanıcı iki
+     saniye sonra başka ekrana geçerse döngü kendi başına devam eder, ölü
+     DOM'a yazar ve boşuna istek atardı. Bayrak onu ilk turda durduruyor. */
+  let gone = false;
+  onLeave(() => { gone = true; });
+
   (async () => {
     for (const c of colEls) {
+      if (gone) return;
       try {
         await loadBand(c.b);
       } catch (e) {
-        console.warn(`[wall] ${c.b.name} okunamadı:`, e.message);
+        console.warn(`[summary] ${c.b.name} okunamadı:`, e.message);
         data.set(c.b.id, { events: [], apps: [], loose: [] });
       }
+      if (gone) return;
       renderColumn(c);
       renderSummary();
     }
@@ -353,11 +366,17 @@ export async function screenSummary(collectionId) {
        demek değil. */
     const loose = [];
     for (const o of free) {
-      const a = apps.find((x) =>
+      const fit = apps.filter((x) =>
         x.videoIds.has(String(o.video_id))
         && x.tracks[0].class_name === o.class_name
         && o._t0 >= x.t0 - 0.25 && o._t1 <= x.t1 + 0.25);
-      if (a) a.absorbed.push(o); else loose.push(o);
+      /* İKİ KİŞİYE BİRDEN UYUYORSA HİÇBİRİNE VERİLMİYOR.
+         Kalabalık bir girişte iki kişinin görülme aralıkları üst üste
+         binebiliyor; böyle bir pencerenin içindeki bağsız track ikisinden
+         hangisine ait, bilmiyoruz. Rastgele birine yazmak "Person 3'ün 9
+         parçası var" gibi sessizce yanlış bir sayı üretirdi. Belirsizlikte
+         track bağsız kalıyor ve kullanıcı zaman çizgisinde kendi bağlıyor. */
+      if (fit.length === 1) fit[0].absorbed.push(o); else loose.push(o);
     }
 
     for (const a of apps) {
@@ -461,7 +480,13 @@ export async function screenSummary(collectionId) {
           + 'Link them on the timeline screen.',
       }, `+${d.loose.length}`));
     }
-    for (const a of d.apps.slice(0, 8)) {
+    /* Nokta başına bir KİŞİ. Aynı kişi bu grupta iki kez görünmüşse iki
+       görülmesi var ama tek noktası: nokta sırası "kaç kişi" sorusunun
+       cevabı ve yandaki sayıyla tutmalı. */
+    const seenN = new Set();
+    for (const a of d.apps) {
+      if (seenN.has(a.person.n) || seenN.size >= 8) continue;
+      seenN.add(a.person.n);
       c.mini.append(el('i', {
         style: { background: a.color || '#33415a' },
         title: `Person ${a.person.n}`,
@@ -572,8 +597,8 @@ export async function screenSummary(collectionId) {
         el('span', { class: 'big' }, '·'),
         el('div', { class: 'ttl' }, 'No event'),
         el('div', { class: 'why' }, d.events.length
-          ? `${d.events.length} segments, all of them quiet. Turn on `
-            + '"Quiet events" to see them.'
+          ? `${d.events.length} segments, all of them quiet. Use the `
+            + '"N quiet" button in the header to see them.'
           : 'The analysis produced no event for this group.')));
       return;
     }
