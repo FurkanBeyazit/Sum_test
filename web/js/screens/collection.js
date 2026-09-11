@@ -40,7 +40,7 @@ import { CollectionClock } from '../collectionclock.js';
 import { loadIdentities, idKey } from '../identity.js';
 import {
   ROOT, onLeave, topbar, treePanel, playerControls, skeletonRows,
-  skeletonCards,
+  skeletonCards, rememberCollection,
 } from '../ui.js';
 /* Sağ paneldeki arama Object ekranıyla AYNI dosyadan geliyor: "aynı olsun"
    ancak tek kaynakla kalıcı oluyor (bkz. objsearch.js). */
@@ -84,6 +84,9 @@ const PALETTE = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#38bdf8',
   '#3b82f6', '#a855f7', '#f472b6', '#2dd4bf', '#f8fafc'];
 
 export async function screenCollection(collectionId, query) {
+  /* Üst çubuktaki Summary sekmesi bunu okuyor (bkz. ui.js topbar). */
+  rememberCollection(collectionId);
+
   const stage = el('div.stage');
   const rightbar = el('div.rightbar');
   const sidebar = el('div.sidebar', {},
@@ -363,6 +366,14 @@ export async function screenCollection(collectionId, query) {
         alignSw,
         hlsSw,
         modeSw,
+        /* Özete giden kapı. Bu ekran ÇALIŞMA ekranı, özet SONUÇ ekranı;
+           sıra da bu — önce bağla, sonra sonuca bak. */
+        el('a.btn.sm.ghost', {
+          href: `#/summary/${col.id}`,
+          style: { marginRight: '10px' },
+          title: 'Collection summary — every group side by side, with the '
+            + 'people you linked traced across the cameras.',
+        }, 'Summary →'),
         totalLbl,
         el('span', { class: 'tiny muted' }, clock.summary())),
       warn),
@@ -1634,4 +1645,40 @@ export async function screenCollection(collectionId, query) {
      yüzlerce olabilir. Listede görünmeyen üye "n track(s)" sayısında yine
      de sayılıyor, tıklanınca uyarı çıkıyor. */
   syncAll();
+
+  /* ---------------------------------------------- dışarıdan gelen an ----
+     Summary ekranından bir kişiye ya da olaya tıklandığında buraya
+     `?g=<grup>&v=<video>&t=<saniye>` ile geliniyor: "o anı aç ve OYNAT".
+
+     Saniye VİDEO İÇİ, eksen saniyesi değil. Eksen `align` seçimine göre
+     kayıyor (zero/wall) ve adreste eksen saniyesi taşımak, kullanıcı
+     hizalamayı değiştirdiği anda bağlantıyı yanlış ana götürürdü. Video içi
+     saniye ise mutlak: çeviriyi burada, o andaki hizalamaya göre yapıyoruz.
+
+     Bu blok BÜTÜN bandlar yüklendikten sonra çalışıyor — nesne seçimi için
+     verinin gelmiş olması gerekiyor. */
+  const jump = query && query.get('v');
+  if (jump) {
+    const b = clock.byId(query.get('g')) || clock.bandOfVideo(jump);
+    if (b) {
+      /* Track verildiyse `pickObject` yeterli: o zaten bandı seçiyor, ana
+         atlıyor, Info panelini dolduruyor ve oynatıyor. Kullanıcı Summary'de
+         birine tıkladı — burada kimin oynadığını da okumalı. */
+      const tid = query.get('track');
+      const d = data.get(b.id);
+      const o = tid && d && d.objects.find((x) =>
+        String(x.video_id) === String(jump)
+        && String(x.track_id) === String(tid));
+      if (o) {
+        pickObject(o, b);
+      } else {
+        active = b;
+        seek(b.axisOf(jump, Number(query.get('t')) || 0));
+        /* Otomatik oynatma tarayıcı tarafından reddedilebilir (kullanıcı
+           hareketi olmadan). Reddedilirse ekran doğru anda durmuş hâlde
+           kalıyor — kaybedilen tek şey oynatmanın kendisi. */
+        videoEl.play().catch(() => {});
+      }
+    }
+  }
 }

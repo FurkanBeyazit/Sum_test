@@ -28,6 +28,18 @@ export function rememberVideo(id) {
 function lastVideo() {
   try { return sessionStorage.getItem('lastVideo'); } catch { return null; }
 }
+
+/* Son bakılan KOLEKSİYON — aynı gerekçe, bir katman yukarısı.
+   Summary sekmesi koleksiyon kapsamlı: "hangi koleksiyonun özeti" sorusuna
+   bir cevap gerekiyor ve en doğrusu "en son hangisine baktıysan o". Hiç
+   koleksiyon açılmamışsa katalogdaki ilkine düşüyor; koleksiyon yoksa
+   sekme hiç çizilmiyor (bkz. topbar). */
+export function rememberCollection(id) {
+  try { sessionStorage.setItem('lastCol', String(id)); } catch {}
+}
+function lastCollection() {
+  try { return sessionStorage.getItem('lastCol'); } catch { return null; }
+}
 let CLEANUP = [];
 export function onLeave(fn) { CLEANUP.push(fn); }
 export function runCleanup() { CLEANUP.forEach(f => { try { f(); } catch {} }); CLEANUP = []; }
@@ -406,11 +418,22 @@ export function topbar(active) {
 
      Manage ve System sekme çubuğundan çıktı — ikisi de günlük iş değil,
      ayar. Manage sağdaki dişliye taşındı; System'in zaten karşılığı yok. */
+  /* SUMMARY SEKMESİ ANCAK KOLEKSİYON VARSA.
+     Ekran koleksiyon kapsamlı; koleksiyon yoksa gidecek bir yer de yok ve
+     tıklanınca boş ekran veren bir sekme, olmayan sekmeden kötü. Hangi
+     koleksiyon sorusunun cevabı Object/Analysis sekmelerindekiyle aynı
+     kural: en son bakılan, yoksa listedeki ilk. */
+  const colList = store.get('collections') || [];
+  const seenCol = lastCollection();
+  const firstCol = (colList.find((c) => String(c.id) === String(seenCol))
+    || colList[0] || {}).id;
+
   const tabs = [
     ['home', 'Home', '#/home'],
     ['upload', 'Upload & Analysis', '#/upload'],
     ...(FEATURES.objects ? [['objects', 'Object', `#/objects/${first || ''}`]] : []),
     ['single', 'Analysis', `#/single/${first || ''}`],
+    ...(firstCol ? [['summary', 'Summary', `#/summary/${firstCol}`]] : []),
   ];
   return el('div.topbar',
     // Logo veya program adına tıklayınca ana sayfaya dönülür

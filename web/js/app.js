@@ -17,6 +17,7 @@ import { screenUpload } from './screens/upload.js';
 import { screenSystem } from './screens/system.js';
 import { screenManage } from './screens/manage.js';
 import { screenCollection } from './screens/collection.js';
+import { screenSummary } from './screens/summary.js';
 
 async function route() {
   runCleanup();
@@ -72,6 +73,14 @@ async function route() {
       case 'collection':
         if (!p[1]) { location.hash = '#/home'; return; }
         await screenCollection(p[1], q); break;
+      /* Summary: koleksiyonun SONUÇ ekranı. Zaman çizgisi ekranında yapılan
+         kişi bağlamalarının çıktısı burada okunuyor; hiçbir şey yazmıyor
+         (bkz. summary.js). `wall` eski adıydı — verilmiş bağlantılar
+         kırılmasın diye yönlendiriliyor. */
+      case 'wall': location.hash = `#/summary/${p[1] || ''}`; return;
+      case 'summary':
+        if (!p[1]) { location.hash = '#/home'; return; }
+        await screenSummary(p[1]); break;
       case 'home': await screenHome(); break;
       case 'upload': await screenUpload(); break;
       // Jobs, Manage ekranina tasindi — eski yer imleri kirilmasin
