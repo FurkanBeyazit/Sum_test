@@ -1425,18 +1425,66 @@ table.mg .warnq { color: #fbbf24; }
 /* ==========================================================================
    Collection ekrani  (#/collection/:id)
    --------------------------------------------------------------------------
-   Bu ekranin tek zor kismi DIKEY BUTCE: zaman cizgisi band acilip kapandikca
-   yukseklik degistiriyor. Panel `flex` ile buyuyup kuculuyor, oynatici ise
-   asgari bir yuksekligi koruyor — aksi hâlde uc band acildiginda video birkac
-   piksele iniyor ve ekranin amaci (goruntuye bakmak) kayboluyor.
+   Bu ekranin tek zor kismi DIKEY BUTCE: zaman cizgisi band acilip
+   kapandikca yukseklik degistiriyor ve o degisim UZERIDEKI videoyu
+   etkilememeli.
+
+   Kural: ust sira (video + Info) pencereye gore sabit, zaman cizgisi de
+   artan alanin tamami. Ikisi arasinda pazarlik yok — asagidaki iki `flex`
+   bildirimi bunun tamami.
    ========================================================================== */
+/* ÜST SIRA: solda oynatıcı, sağında Info.
+   -----------------------------------------
+   Info eskiden videonun ALTINDA boydan boya bir şeritti ve dikeyden yer
+   yiyordu. Yana alınınca hem o yer geri geldi hem de dört satırlık bir
+   metnin ekranın tamamı kadar geniş olması saçmalığı bitti.
+
+   ÜST SIRANIN BOYU SABİT — VE ALTTAKİNDEN BAĞIMSIZ.
+   Önce üst sıra esnek, zaman çizgisi `flex: 0 0 auto` idi: bir band açılınca
+   tuval uzuyor, panel içeriğine göre büyüyor ve üstteki sırayı aşağıdan
+   yukarı sıkıştırıyordu. Video kuyusu asgari yüksekliğine dayanınca da
+   görüntünün alt kısmı ekranın dışında kalıyordu.
+
+   Bir tavan koymak (max-height) yetmedi: tavana kadar olan büyüme yine
+   videoyu yiyordu. Çözüm ilişkiyi tersine çevirmek — üst sıranın boyu
+   KARDEŞİNDEN DEĞİL pencereden geliyor (vh), zaman çizgisi de artandan
+   ibaret. Artık band açmak videoya matematiksel olarak dokunamıyor. */
+.cl-top {
+  display: flex; gap: var(--gap);
+  flex: 0 0 auto;
+  height: clamp(240px, 46vh, 560px);
+}
+/* GENİŞLİĞİ OYNATICI ALIYOR, INFO DEĞİL.
+   İkisini yarı yarıya bölmek denendi ve orantısız durdu: ekranın asıl işi
+   görüntüye bakmak, Info ise dört satır metin ve üç düğme. Bu yüzden ölçü
+   Info'ya veriliyor (dar ve sabit), kalan her şey oynatıcının. */
 .cl-player {
-  flex: 1 1 auto; min-height: 220px;
+  flex: 1 1 auto; min-width: 0;
+  min-height: 180px;
   display: flex; flex-direction: column;
 }
 .cl-player .vwell { flex: 1 1 auto; min-height: 0; }
-.cl-tl { flex: 0 0 auto; }
-.cl-tl .panel-b { overflow: hidden; }
+
+/* `.op-infopanel` Object ekranında ALT şerit olduğu için 240px'te
+   kapanıyor ve büyümüyor. Burada sütun: tavanı kalkıyor, sıranın boyunu
+   dolduruyor, dar kalan tek boyut genişlik. */
+.cl-info {
+  /* Sabit ve dar: içeriği bir kırpım, dört satır metin ve üç düğme —
+     genişledikçe daha çok bilgi göstermiyor, yalnızca boşluk büyüyor. */
+  flex: 0 0 clamp(196px, 18%, 252px);
+  min-width: 0; max-height: none;
+}
+
+/* ALT SIRA: zaman çizgisi — ARTAN ALANIN TAMAMI, NE FAZLASI NE AZI.
+   `flex-basis: 0` kritik: `auto` olsaydı başlangıç boyu tuvalin kendi
+   yüksekliği olurdu ve panel yine içeriğiyle büyümek isterdi. Sıfır taban +
+   `min-height: 0` ile panelin boyu yalnızca kalan yerden geliyor; tuval ne
+   kadar uzarsa uzasın panel KENDİ İÇİNDE kayıyor.
+
+   Eskiden `overflow: hidden` idi, yani açılan bandların alt kısmı hem
+   kırpılıyor hem de erişilemez oluyordu. */
+.cl-tl { flex: 1 1 0; min-height: 0; }
+.cl-tl .panel-b { overflow: auto; }
 
 /* Hangi kameraya bakildigi videonun ustunde yaziyor. Oynatici hover ile
    grup degistirdigi icin bu etiket ekranin en cok degisen bilgisi —
@@ -1648,3 +1696,49 @@ table.mg .warnq { color: #fbbf24; }
    yetmiyor, cunku goz cizginin gectigi yerdeki kalabaligi da okuyor. */
 .su-track.focus .su-chip:not(.lit) { opacity: .2; }
 .su-track.focus .su-ev:not(.hot) { opacity: .18; }
+
+
+/* --- Collection: dar Info paneli ------------------------------------------
+   Info artık videonun ALTINDA geniş bir şerit değil, YANINDA dar bir sütun.
+   Eski düzen tek satıra güveniyordu ("Person 3 · #12 person · A · Giriş ·
+   18:02–18:03") ve dar sütunda o satırın yarısı üç noktaya dönüşüyordu.
+   Bilgi artık alt alta: her satır kendi başına okunuyor, düğmeler de sağda
+   dikey bir sütun yerine altta sarılan bir sıra. */
+.cl-inforow {
+  display: flex; gap: 9px; padding: 9px 10px; align-items: flex-start;
+}
+.cl-infoim {
+  width: 44px; aspect-ratio: 1/1.7; object-fit: contain; flex: 0 0 auto;
+  border-radius: 5px; background: var(--bg-inset);
+}
+.cl-infocol {
+  min-width: 0; display: flex; flex-direction: column; gap: 3px;
+}
+/* Kişi adı satırın en üstünde ve TEK renkli şey: renk yalnızca kişiyi
+   anlatıyor (ekranın geri kalanındaki kuralla aynı). */
+.cl-infoperson { font: 700 13px var(--sans); letter-spacing: .2px; }
+.cl-infottl {
+  font: 600 11.5px var(--mono); color: var(--tx-0);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cl-infometa {
+  font: 400 11px var(--mono); color: var(--tx-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Açıklama üç satırda kesiliyor: VLM metni bazen bir paragraf ve panelin
+   tamamını yiyordu. Tamamı ipucunda duruyor. */
+.cl-infodesc {
+  padding: 0 10px 8px; font-size: 11px; color: var(--tx-2); line-height: 1.55;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.cl-infoacts {
+  display: flex; flex-wrap: wrap; gap: 4px; padding: 0 10px 10px;
+}
+/* Dar sutunda uc dugme yan yana sigmiyor; sarmak yerine her biri kendi
+   satirini kapliyor ve metni soldan hizali kaliyor — ortalanmis, yarim
+   sarmis bir sira okunmuyordu. */
+.cl-infoacts .btn { width: 100%; justify-content: flex-start; }
+.cl-infohint {
+  padding: 10px 11px; font-size: 11px; line-height: 1.6; color: var(--tx-2);
+}

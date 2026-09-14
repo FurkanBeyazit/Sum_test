@@ -351,7 +351,9 @@ export async function screenCollection(collectionId, query) {
   }, '✕');
   infoClear.style.display = 'none';
   const infoBody = el('div.panel-b.op-info', {});
-  const infoPanel = el('div.panel.op-infopanel', {},
+  /* `.cl-info`: panel artık videonun altında geniş bir şerit değil, yanında
+     dar bir sütun. İçerik de ona göre diziliyor (bkz. showInfo). */
+  const infoPanel = el('div.panel.op-infopanel.cl-info', {},
     el('div.panel-h', {}, 'Info', el('span.grow'), infoClear),
     infoBody);
 
@@ -377,8 +379,12 @@ export async function screenCollection(collectionId, query) {
         totalLbl,
         el('span', { class: 'tiny muted' }, clock.summary())),
       warn),
-    el('div.panel.cl-player', {}, vwell, ctl),
-    tlPanel, infoPanel);
+    /* Üst sıra: dar oynatıcı + yanında Info. Zaman çizgisi en altta, kalan
+       dikey alanın tamamı onun (bkz. app.css `.cl-top`). */
+    el('div.cl-top', {},
+      el('div.panel.cl-player', {}, vwell, ctl),
+      infoPanel),
+    tlPanel);
   mount(rightbar, objPanel, listPanel, search.node);
 
   /* ============================================================ oynatma ===
@@ -739,7 +745,7 @@ export async function screenCollection(collectionId, query) {
     clear(infoBody);
     infoClear.style.display = o ? '' : 'none';
     if (!o) {
-      infoBody.append(el('div', { class: 'tiny muted' },
+      infoBody.append(el('div.cl-infohint', { class: 'muted' },
         'Click a segment to jump the video there. Drag from one group’s '
         + 'segment onto another’s to say "same person".'));
       return;
@@ -749,28 +755,40 @@ export async function screenCollection(collectionId, query) {
     const person = key && ids ? ids.labelOf(key) : null;
     const mark = key && ids ? ids.colorOf(key) : null;
 
-    infoBody.append(el('div.op-inforow', {},
+    const span = o._t1 > o._t0 + 0.5
+      ? `${clock.clock(o._t0)} – ${clock.clock(o._t1)}`
+      : clock.clock(o._t0);
+
+    /* DAR SÜTUN DÜZENİ.
+       Eskiden hepsi tek satırdaydı ("Person 3 · #12 person · A · Giriş ·
+       18:02–18:03") çünkü panel videonun altında boydan boya uzanıyordu.
+       Panel artık videonun yanında ve dar; o satırın yarısı üç noktaya
+       dönüşürdü. Her bilgi kendi satırında, en önemlisi en üstte. */
+    infoBody.append(el('div.cl-inforow', {},
       o.crop
         ? el('img', {
-          class: 'op-infoim', src: o.crop,
+          class: 'cl-infoim', src: o.crop,
           style: mark ? { boxShadow: `0 0 0 2px ${mark}` } : {},
           onerror: (e) => { e.target.style.visibility = 'hidden'; },
         })
         : null,
-      el('div.op-infomain', {},
-        el('div.op-infoline', {},
-          /* Kişi adı en başta: koleksiyonda okunacak ilk bilgi bu. */
-          person ? el('b', { style: { color: mark || '#e8eef6' } },
-            `${person} · `) : null,
-          el('b', {}, o._title),
-          ' · ',
-          /* Hangi kamera — harf + ad. Renk vermiyoruz: bu satırdaki tek
-             renkli şey kişi adı olmalı. */
-          el('b', {}, b ? `${b.letter} · ${b.name}` : ''),
-          ` · ${clock.clock(o._t0)}`
-          + (o._t1 > o._t0 + 0.5 ? ` – ${clock.clock(o._t1)}` : '')),
-        el('div', { class: 'tiny muted' }, o._desc || '')),
-      el('div.col', { style: { gap: '5px' } },
+      el('div.cl-infocol', {},
+        /* Kişi adı en başta ve TEK renkli şey: koleksiyonda okunacak ilk
+           bilgi bu, ve renk yalnızca kişiyi anlatıyor. */
+        person
+          ? el('div.cl-infoperson', { style: { color: mark || '#e8eef6' } },
+            person)
+          : null,
+        el('div.cl-infottl', { title: o._title }, o._title),
+        /* Hangi kamera — harf + ad. Renk vermiyoruz. */
+        b ? el('div.cl-infometa', { title: b.name },
+          `${b.letter} · ${b.name}`) : null,
+        el('div.cl-infometa', {}, span))),
+      /* Açıklama kendi satırında ve üç satırda kesiliyor; tamamı ipucunda. */
+      o._desc
+        ? el('div.cl-infodesc', { title: o._desc }, o._desc)
+        : null,
+      el('div.cl-infoacts', {},
         el('button.btn.sm.ghost', {
           title: `Play from ${clock.clock(o._t0)} on `
             + `${b ? `${b.letter} · ${b.name}` : ''}.`,
@@ -808,7 +826,7 @@ export async function screenCollection(collectionId, query) {
               showInfo(o);
             },
           }, '⊘ Unlink')
-          : null)));
+          : null));
   }
 
   /**
