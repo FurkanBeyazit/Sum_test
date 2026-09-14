@@ -1230,6 +1230,7 @@ export async function screenObjects(videoId, query) {
           && o.cls !== reid.target.cls) {
         reid.cands.delete(key);
         reid.dropped = (reid.dropped || 0) + 1;
+        reid.dropCls.set(o.cls, (reid.dropCls.get(o.cls) || 0) + 1);
         reidStatus();
         continue;
       }
@@ -1270,9 +1271,23 @@ export async function screenObjects(videoId, query) {
       el('b', { style: { color: colorOf(reid.target) || '#e8eef6' } },
         `#${reid.target.track_id}`),
       ` — ${n} candidate${listed === 1 ? '' : 's'} · `
-        + (REID_ST[reid.status] || reid.status)
-        + (reid.dropped
-          ? ` · ${reid.dropped} other-class dropped` : ''),
+        + (REID_ST[reid.status] || reid.status),
+      /* Elenenlerin DÖKÜMÜ ipucunda. Sınıf bir tahmin değil, modelin kendi
+         `class_id`si (bkz. backend.js classIndex); sınıfı BİLİNMEYEN aday
+         hiç elenmiyor, listede kalıyor. */
+      reid.dropped
+        ? el('span', {
+          class: 'muted',
+          style: { cursor: 'help' },
+          title: `${reid.dropped} candidate(s) had a different class than `
+            + `the target (${reid.target.cls}) and were removed:\n`
+            + [...reid.dropCls.entries()]
+              .sort((a, b) => b[1] - a[1])
+              .map(([cls, k]) => `· ${cls} — ${k}`).join('\n')
+            + '\n\nThe class comes from the model itself. A track whose '
+            + 'class is unknown is never dropped.',
+        }, ` · ${reid.dropped} other-class dropped`)
+        : null,
       el('span', { class: 'muted' },
         '  ·  drag from the target onto a candidate to confirm'));
   }
@@ -1287,7 +1302,10 @@ export async function screenObjects(videoId, query) {
     if (!colorOf(o)) setMark(o, nextColor());
     marked.set(o.id, o);
     reid = { target: o, cands: new Map(), rank: new Map(), status: 'running',
-             got: 0, total: 0, dropped: 0, stream: null };
+             got: 0, total: 0, dropped: 0, stream: null,
+             /* Hangi sınıflar elendi — ipucunda tek tek yazıyor. Tek bir
+                sayı "neyi attık" sorusunu cevapsız bırakıyordu. */
+             dropCls: new Map() };
     reidBar.style.display = '';
     reidStatus();
     selected = o;

@@ -1396,6 +1396,7 @@ export async function screenCollection(collectionId, query) {
       if (!b) {
         reid.cands.delete(key);
         reid.dropped = (reid.dropped || 0) + 1;
+        reid.dropOut += 1;
         reidStatus();
         continue;
       }
@@ -1407,6 +1408,7 @@ export async function screenCollection(collectionId, query) {
           && o.cls !== reid.target.cls) {
         reid.cands.delete(key);
         reid.dropped = (reid.dropped || 0) + 1;
+        reid.dropCls.set(o.cls, (reid.dropCls.get(o.cls) || 0) + 1);
         reidStatus();
         continue;
       }
@@ -1448,10 +1450,55 @@ export async function screenCollection(collectionId, query) {
       }, `#${reid.target.track_id}`),
       el('span', { class: 'muted' }, tb ? ` ${tb.letter} · ${tb.name}` : ''),
       ` — ${n} candidate${listed === 1 ? '' : 's'} · `
-        + (REID_ST[reid.status] || reid.status)
-        + (reid.dropped ? ` · ${reid.dropped} dropped` : ''),
+        + (REID_ST[reid.status] || reid.status),
+      reid.dropped ? dropChip() : null,
       el('span', { class: 'muted' },
         '  ·  drag from the target onto a candidate to confirm'));
+  }
+
+  /**
+   * "58 dropped" rozetinin dökümü.
+   *
+   * Sayının kendisi bir soru bırakıyordu: neyi attık? İki ayrı sebep var ve
+   * ikisi de sessizce aynı sayıya yazılıyordu:
+   *
+   *   1) BAŞKA SINIF — sunucunun sıralaması sınıf ayırmıyor, bir kişiyi
+   *      ararken araç/bisiklet track'leri de geliyor. Sınıf tahmin değil:
+   *      modelin kendi `class_id`si (liste ucundan, bkz. backend.js
+   *      classIndex). Sınıfı BİLİNMEYEN aday elenmiyor, listede kalıyor.
+   *   2) BU KOLEKSİYONDA DEĞİL — adayın videosu koleksiyonun eksenine
+   *      oturmuyor (başka koleksiyona taşınmış, silinmiş, ya da süresi
+   *      okunamadığı için bandı hiç kurulamamış). Bunlar İNSAN da olabilir;
+   *      "hepsi arabaydı" demek yanlış olurdu.
+   *
+   * İpucu ikisini ayırıyor ve sınıfları tek tek sayıyor.
+   */
+  function dropChip() {
+    const parts = [...reid.dropCls.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([cls, n]) => `${cls} ${n}`);
+    const lines = [
+      `${reid.dropped} candidate(s) were removed from the list:`,
+      parts.length ? `· different class — ${parts.join(' · ')}` : null,
+      parts.length
+        ? '  (the class comes from the model itself; a track whose class is '
+          + 'unknown is never dropped)'
+        : null,
+      reid.dropOut
+        ? `· not on this collection's timeline — ${reid.dropOut}`
+        : null,
+      reid.dropOut
+        ? '  (their video is not in this collection, or it has no readable '
+          + 'duration — these may well be people)'
+        : null,
+    ].filter(Boolean);
+    return el('span', {
+      class: 'muted', style: { cursor: 'help' }, title: lines.join('\n'),
+    }, ` · ${reid.dropped} dropped`
+      + (reid.dropOut && parts.length
+        ? ` (${reid.dropped - reid.dropOut} other-class, `
+          + `${reid.dropOut} off-collection)`
+        : (reid.dropOut ? ' (off-collection)' : ' (other class)')));
   }
 
   function startReid(o) {
@@ -1464,6 +1511,12 @@ export async function screenCollection(collectionId, query) {
     reid = {
       target: o, cands: new Map(), rank: new Map(), status: 'running',
       got: 0, total: 0, dropped: 0, stream: null,
+      /* Elenenlerin DÖKÜMÜ. Tek bir "58 dropped" sayısı, sorulduğunda
+         cevaplanamayan bir sayı: hangi sınıflar, kaç tanesi eksende yeri
+         olmadığı için düştü? İkisi ayrı sebep ve ikisi ayrı anlam taşıyor
+         (bkz. reidStatus ipucu). */
+      dropCls: new Map(),   // sınıf adı → kaç tane
+      dropOut: 0,           // koleksiyon ekseninde karşılığı olmayanlar
     };
     reidBar.style.display = '';
     reidStatus();
