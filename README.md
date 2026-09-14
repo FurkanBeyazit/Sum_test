@@ -1,301 +1,177 @@
 # 지능형 영상 요약 플랫폼 — Arayüz
 
-<sub>[한국어 README](README.ko.md)</sub>
+> Son güncelleme: 2026-09-14 · Kod: commit 2026-09-14 (`fix(reid): split dropped counter…`)
+> Korece sürüm: [README.ko.md](README.ko.md) · Ayrıntılı rehberler: `docs/` (depoda değil, yerel diskte)
 
-CCTV kayıtlarını yükleyen, analiz kuyruğuna alan ve sonuçları zaman çizgisinde
-gösteren web arayüzü. Veri kaynağı tek: gerçek DVSummary backend'i.
-
-```bash
-python server.py            # http://127.0.0.1:8000
-```
-
-Backend başka bir makinedeyse:
+CCTV kayıtlarını yükleyen, analiz kuyruğuna alan, sonuçları zaman çizgisinde gösteren ve birden çok kamerayı tek eksende karşılaştıran web arayüzü. Veri kaynağı tek: **DVSummary backend**'i (`172.20.14.161:8001`).
 
 ```bash
-DVSUMMARY_API=http://host:port python server.py
+python server.py                                  # http://127.0.0.1:8000
+DVSUMMARY_API=http://host:port python server.py   # backend başka makinedeyse
+python server.py --port 9000 --host 0.0.0.0       # başka port / dışarıya aç
 ```
 
-Bağımlılık yok — Python stdlib yeter. Video birleştirme için `ffmpeg` PATH'te
-olmalı.
+Bağımlılık yok — Python stdlib yeter. Video birleştirme için `ffmpeg` PATH'te olmalı. HLS oynatıcı için `web/vendor/hls.min.js` (yoksa ekran eski oynatıcıya düşer). `docs/start.bat`: tarayıcıyı açıp `server.py`'yi başlatır.
 
 ---
 
-## Mimarî
+## 1. Mimarî
 
 ```
-tarayıcı ──fetch('/live/…')──► server.py ──HTTP──► DVSummary API
-   ▲                              │                (172.20.14.161:8001)
+tarayıcı ──fetch('/live/…')──► server.py ──HTTP──► DVSummary API (8001)
+   ▲                              │
    └────────── JSON ──────────────┘
+                                  └── /api/merge/*  (ffmpeg concat → backend'e tek MP4)
 ```
 
-`server.py` üç iş yapar, üçü de küçük:
+`server.py` üç iş yapar:
 
-1. `web/` altındaki statik arayüzü sunar (HTTP Range dahil — seek çalışsın diye)
-2. `/live/*` isteklerini backend'e iletir. Tarayıcı oraya doğrudan gidemiyor:
-   farklı origin, backend'de CORS başlığı yok
-3. `/api/merge/*` — yüklenen parçaları ffmpeg ile tek MP4'e birleştirip
-   backend'e akıtır. Bu iş bize ait
+1. `web/` altındaki statik arayüzü sunar (HTTP Range dahil — video seek için).
+2. `/live/*` isteklerini backend'e iletir (tarayıcı doğrudan gidemez: farklı origin, backend'de CORS yok).
+3. `/api/merge/*` — yüklenen parçaları ffmpeg ile tek MP4'e birleştirip backend'e yükler. Bu iş bize ait.
+   ```
+   POST   /api/merge                 → {merge_id}
+   PUT    /api/merge/{id}/part/{i}   → ham gövde = dosya
+   POST   /api/merge/{id}/build      → ffmpeg concat, meta döner
+   POST   /api/merge/{id}/upload     → backend'e tek video olarak gider
+   DELETE /api/merge/{id}            → geçici dosyaları siler
+   GET    /api/health
+   ```
+
+Mock veri katmanı 2026-08-27'de kaldırıldı; tam hâli `archive/mock/` altında.
 
 ---
 
-## Dosya düzeni
+## 2. Ekranlar (rotalar)
+
+| Rota | Dosya | Ne yapıyor |
+|---|---|---|
+| `#/home` | `screens/home.js` | Başlangıç + "How to Use" + sunucu sağlığı (`/status/health`, 5 sn) |
+| `#/upload` | `screens/upload.js` | Parçaları duvar saatine göre sıralar, ffmpeg ile birleştirir, backend'e yükler, analiz başlatır. Aynı adlı grup varsa onu kullanır; koleksiyona atar |
+| `#/single/:id` | `screens/single.js` | **Analysis** — oynatıcı + VLM olay zaman çizgisi + bbox katmanı. `?hls=1` HLS'i açar |
+| `#/objects/:id` | `screens/objects.js` | **Object** — track şeritleri, PAR araması, kırpımlar, kullanıcı renk ataması, Re-ID kipi (`?reid=<track_id>`) |
+| `#/collection/:id` | `screens/collection.js` | **Collection** — bir koleksiyondaki tüm grupları tek gerçek-saat ekseninde; tek oynatıcı, hover ile grup değişir; `events` / `objects` kipi (`?mode=objects`); gruplar arası kişi bağlama |
+| `#/summary/:id` | `screens/summary.js` | **Summary** — koleksiyonun sonuç ekranı, salt okunur: sütun = grup, altında olaylar; bağlanmış kişiler ve bağlantı çizgileri. (`#/wall` eski ad, yönlendirilir) |
+| `#/manage` | `screens/manage.js` | Koleksiyon/grup/video CRUD + analiz kuyruğu (3 sn yoklama). (`#/jobs` buraya yönlendirilir) |
+| `#/system` | `screens/system.js` | GPU + log |
+| `#/login` | `screens/login.js` | Giriş formu (backend doğrulama istemiyor) |
+
+Ekranlar birbirini **asla** import etmez; yeni ekran = `screens/` altına dosya + `app.js`'te bir `case`.
+
+---
+
+## 3. Dosya düzeni
 
 ```
-├── server.py               köprü + statik + birleştirme
+├── server.py                köprü + statik + birleştirme
+├── tools/proxy_cache.py     tarayıcıda oynatılabilir yerel proxy üretir (HLS yoksa)
 ├── web/
-│   ├── index.html
-│   ├── css/app.css         tasarım sistemi
-│   ├── js/
-│   │   ├── core.js         DOM yardımcıları, store, biçimleme, FEATURES
-│   │   ├── backend.js      DVSummary API adaptörü — tek veri kaynağı
-│   │   ├── overlay.js      canvas bbox katmanı (letterbox, rVFC, DPI)
-│   │   ├── timeline.js     canvas zaman ekseni (zoom/pan, swimlane)
-│   │   ├── app.js          yönlendirici (hash → ekran)
-│   │   ├── ui.js           üst çubuk, sol ağaç, ekran ömrü
-│   │   ├── fx/fibers.js    login arka planı (WebGL2, bağımlılıksız)
-│   │   └── screens/        ekran başına bir dosya
-│   └── assets/proxy/       yerel oynatma proxy'leri (üretilen, depoda yok)
-└── tools/proxy_cache.py    tarayıcıda oynatılabilir proxy üretir
+│   ├── index.html           tek <script type="module">, build yok
+│   ├── css/app.css          tasarım sistemi
+│   ├── vendor/hls.min.js    HLS için (Chrome)
+│   └── js/
+│       ├── core.js          el(), mount(), store, biçimleme, TimeMapper, FEATURES, api
+│       ├── backend.js       DVSummary adaptörü — TEK veri kaynağı, tüm uç adresleri burada
+│       ├── app.js           yönlendirici (hash → ekran)
+│       ├── ui.js            üst çubuk, sol ağaç, oynatıcı kontrolleri, onLeave/runCleanup
+│       ├── timeline.js      canvas zaman ekseni (zoom/pan, şeritler, bands)
+│       ├── overlay.js       video üstü bbox katmanı (letterbox, rVFC, DPI)
+│       ├── bboxfeed.js      bbox verisi için kayan pencere (playhead ±20 sn)
+│       ├── hlsplayer.js     grup HLS akışını <video>'ya bağlar
+│       ├── groupclock.js    parçalı kayıt: duvar saati ↔ oynatma zamanı
+│       ├── collectionclock.js  birden çok grubu tek eksene hizalar (zero / wall)
+│       ├── identity.js      "bu ikisi aynı insan" — linkage + renk'in tek sahibi
+│       ├── objsearch.js     sınıf + PAR arama paneli (Object ve Collection ortak)
+│       ├── parchip.js       PAR rozetleri (yaş/cinsiyet/renk ikonları)
+│       ├── fx/aurora.js     login arka planı (WebGL)
+│       └── screens/         ekran başına bir dosya
+└── docs/ (gitignore)        AKIS-SENARYOSU, ARAYUZ-REHBERI, SISTEM-REHBERI, TEST-ADIMLARI,
+                             PROJE-NOTLARI, Postman koleksiyonu, playback_test.html, start.bat
 ```
+
+Bağımlılık yönü tek yönlü: `app.js → screens/* → ui.js / timeline.js / overlay.js → core.js → backend.js`.
 
 ---
 
-## Arayüz nasıl çalışıyor
+## 4. Üç temel mekanizma
 
-Çatı yok, build adımı yok, bağımlılık yok. Tarayıcı `index.html` içindeki tek
-`<script type="module">` etiketini okuyor, gerisi ES modülleri.
+**`el()` — DOM kurucu** (`core.js`): template string / innerHTML yok. `el('div.panel', {}, çocuklar…)`; `null`/`false` çocuk atlanır → koşullu render `cond ? el(…) : null`.
 
-### Katmanlar
+**`store` — paylaşılan durum**: oturum, katalog (`groups`, `collections`), dil, süzgeçler. Ekrana özel durum store'a girmez, ekran fonksiyonunun kapanışında yaşar.
 
-```
-        app.js                yönlendirici
-           │
-        screens/*.js          ekranlar — birbirini ASLA import etmez
-           │
-    ┌──────┴──────┬───────────┬────────────┐
-  ui.js      timeline.js   overlay.js   fx/fibers.js
-    │
-  core.js                    her şeyin altı
-    │
-  backend.js                 tek veri kaynağı
-```
-
-Bağımlılık yönü tek yönlü, döngü yok. Bir ekranı silmek başka hiçbir şeyi
-bozmuyor; yeni ekran eklemek `screens/` altına bir dosya + `app.js`'te bir
-`case` demek.
-
-### Bir ekran açılırken ne oluyor
-
-```
-hash değişti  →  app.js route()
-                   1. runCleanup()      önceki ekranın timer/observer'ları kapanır
-                   2. oturum            store.user yoksa api.me(), yoksa #/login
-                   3. katalog           store.groups boşsa api.groups() (bir kez)
-                   4. id doğrula        silinmiş video id'si → ilk kayda düş
-                   5. screenX(...)      ekran kendi DOM'unu kurar
-                        └─ mount(ROOT(), …)   #app tamamen değişir
-```
-
-`route()` `hashchange` olayına bağlı. Ekranlar `async`: veriyi kendileri
-çekiyor, `app.js` beklemiyor.
-
-### Üç mekanizma
-
-Arayüzün tamamı bu üçünün üstünde duruyor.
-
-**1 · `el()` — DOM kurucu** (`core.js`)
-
-Template string yok, `innerHTML` yok. İç içe çağrı ağacın kendisi:
-
-```js
-el('div.panel', {},
-  el('div.panel-h', {}, 'Info', el('span.grow'), btn),
-  el('div.panel-b', {}, grid));
-```
-
-`'div.panel.op-info'` sınıfları ayrıştırıyor, `onclick` doğrudan fonksiyon
-alıyor, `style` nesne kabul ediyor, `null`/`false` çocuklar atlanıyor — koşullu
-render için `cond ? el(…) : null` yazmak yetiyor.
-
-**2 · `store` — paylaşılan durum** (`core.js`)
-
-Ekranlar arası taşınan tek şey: oturum, katalog, dil, süzgeçler.
-
-```js
-store.set({ groups: g.groups });
-const gs = store.get('groups');
-```
-
-Ekrana özel durum (seçili nesne, atanmış renkler) store'a girmiyor — ekran
-fonksiyonunun kapanışında yaşıyor, ekran kapanınca çöp toplayıcıya gidiyor.
-
-> `store` bir yayın/abone mekanizması da taşıyor (`store.on(key, fn)`) ama
-> **hiçbir yerde kullanılmıyor**: ekranlar `mount()` ile kendilerini bütün
-> olarak yeniden çiziyor. Sınıfta ayrıca hiç okunmayan ~18 anahtar duruyor
-> (`playhead`, `showTrails`, `segments`…) — mock döneminden kalma. Temizlenmesi
-> gereken bir yer.
-
-**3 · `onLeave()` — ekran ömrü** (`ui.js`)
-
-Ekranlar zamanlayıcı, `ResizeObserver`, `EventSource` açıyor. Kapanışta
-kapatılmazlarsa arka planda kalıp yok olmuş DOM'a yazmaya çalışıyorlar:
-
-```js
-const t = setInterval(poll, 3000);
-onLeave(() => clearInterval(t));
-```
-
-`app.js` bir sonraki gezinmede `runCleanup()` ile hepsini çalıştırıyor.
-
-> Bir tuzak: ekran `await api.detections(…)` beklerken kullanıcı gezinebilir.
-> Devam eden kod artık ekranda olmayan bir düğüme yazar. Uzun `await`'lerden
-> sonra `if (!document.body.contains(vwell)) return;` kontrolü var.
+**`onLeave()` — ekran ömrü** (`ui.js`): timer / `ResizeObserver` / `EventSource` açan ekran kapanışta bunları `onLeave(() => …)` ile bırakır; `app.js` bir sonraki gezinmede `runCleanup()` çağırır. Uzun `await`'lerden sonra `if (!document.body.contains(node)) return;` kontrolü var.
 
 ---
 
-## Dosya dosya
+## 5. FEATURES bayrakları (`core.js`)
 
-### Çekirdek
-
-| Dosya | Satır | Ne yapıyor |
-|---|---:|---|
-| **`core.js`** | 382 | `el()`, `mount()`, `clear()`; `store`; zaman/boyut biçimleme (`hms`, `dur`, `bytes`); `toast()`, `modal()`; `TimeMapper` (duvar saati ↔ video saniyesi); `FEATURES` bayrakları; `api` nesnesini dışa veriyor |
-| **`backend.js`** | 1152 | DVSummary'nin **tek** adaptörü. Ekranlar `fetch` çağırmıyor, hepsi buradan geçiyor. Uç adresleri, sorgu parametreleri, önbellek ve backend tuhaflıklarının tamamı bu dosyada kapalı |
-| **`app.js`** | 127 | Yönlendirici. Hash → ekran, oturum/katalog ön koşulu, ekran değişiminde temizlik |
-| **`ui.js`** | 294 | Her ekranda tekrar eden parçalar: üst çubuk, sol video ağacı, onay kutusu, yeniden analiz sorusu; `onLeave`/`runCleanup` |
-
-### Canvas katmanları
-
-| Dosya | Satır | Ne yapıyor |
-|---|---:|---|
-| **`timeline.js`** | 396 | Zaman ekseni. Zoom/pan, şeritler (swimlane), playhead, tıklama→saniye eşlemesi. DPI'a göre ölçekleniyor; `clientWidth`ten genişlik okuyor |
-| **`overlay.js`** | 305 | Video üstündeki kutu katmanı. `object-fit: contain` letterbox matematiği: videonun gerçek kare alanı ile `<video>` kutusu farklı, kutular kaymasın diye geometri her yeniden boyutlamada hesaplanıyor. `requestVideoFrameCallback` ile kareye kilitli |
-| **`fx/fibers.js`** | 372 | Login arka planı. Ham WebGL2, kütüphane yok. Görünmezken / sekme arka plandayken / `prefers-reduced-motion` açıkken tamamen duruyor |
-
-### Ekranlar
-
-| Dosya | Satır | Rota | Ne yapıyor |
-|---|---:|---|---|
-| **`upload.js`** | 1252 | `#/upload` | Parçaları duvar saatine göre sıralar, sunucuda ffmpeg ile birleştirir, backend'e yükler, analiz kuyruğuna alır. Grup adı çakışırsa mevcut grubu kullanır |
-| **`single.js`** | 915 | `#/single/:id` | Oynatıcı + olay zaman çizgisi + VLM açıklamaları. `timeline.js` ve `overlay.js` burada buluşuyor |
-| **`objects.js`** | 632 | `#/objects/:id` | Track listesi, PAR araması, bestshot ızgarası, kullanıcının atadığı renklerle timeline şeritleri |
-| **`manage.js`** | 355 | `#/manage` | Grup/video CRUD + analiz kuyruğu (3 sn'de bir yoklama) |
-| **`home.js`** | 119 | `#/home` | Sunucu sağlığı, 5 sn'de bir `/status/health` |
-| **`system.js`** | 84 | `#/system` | Worker durumları |
-| **`login.js`** | 43 | `#/login` | Giriş formu (backend henüz doğrulama istemiyor) |
-
----
-
-## backend.js — neden bu kadar büyük
-
-Arayüzün geri kalanı temiz kalsın diye backend'in bütün tuhaflıkları tek
-dosyada toplanıyor. Ekranlar `api.objects(videoId, {cls, par})` çağırıyor,
-altında ne döndüğünü bilmiyor:
-
-- **Zaman birimi** — `timestamp` bir dönem saniye, bir dönem 1/30000 zaman
-  tabanıydı (kare başına 1001 birim). `tsToSec()` ikisini de tanıyor.
-  `frame_index` zaman için **kullanılmıyor**: analiz hattı 37.2 kare/sn
-  sayıyor, video gerçekte 30 fps
-- **Sınıf adı** — uç `class_name` vermiyor, yalnızca `class_id`. Ad tablosu
-  burada; ilk aramada `[backend] sınıf dağılımı` konsola yazılıyor
-- **Sınıf süzgeci** — uçta `class_id` parametresi yok, süzme istemcide
-- **PAR süzgeci** — `matched_attribute` hep `null` dönüyor, süzme
-  `par.attributes` sözlüğünün üstünde yapılıyor
-- **Lifecycle** — liste ucu track'in giriş/çıkış zamanını vermiyorsa ayrıntı
-  ucundan sekizerli havuzla tamamlanıyor, sonuç önbelleğe alınıyor
-- **Proxy tazeliği** — proxy kaydının içinde kaynağın `guid_id` imzası var;
-  backend sıfırlanıp id'ler yeniden kullanılırsa eski proxy reddediliyor
-
-### FEATURES bayrakları
-
-`core.js` başındaki bu nesne, backend'in henüz veremediği yetenekleri kapalı
-tutuyor. Kod yazılmış ve duruyor; bayrak `true` olunca çiziliyor.
-
-| Bayrak | Durum | Neyi bekliyor |
+| Bayrak | Durum | Not |
 |---|---|---|
-| `objects` | **açık** | — |
-| `bbox` | kapalı | `/playback/groups/{gid}/bboxes` JSON çıktısı (şu an msgpack, grup kapsamlı) |
-| `reid` | kapalı | analiz hattında embedding üretimi |
-| `map`, `eventSearch`, `eventStatus`, `snapshot` | kapalı | karşılığı olan uç yok |
+| `objects` | **açık** | `/analysis/result/{id}/tracks`, `/tracks/par/stats`, `/track/{id}/crop` |
+| `bbox` | **açık** | `GET /playback/groups/{gid}/bboxes?start_at=&end_at=&format=json` — grup kapsamlı, duvar saatiyle; `bboxfeed.js` üç pencere tutar |
+| `merge` | **açık** | Parçalar her zaman ffmpeg ile birleştirilip MP4 olarak yüklenir (AVI tarayıcıda oynamaz) |
+| `mergeToggle` | kapalı | Onay kutusu gizli; kip hep açık |
+| `hls` | **kapalı (varsayılan)** | `GET /playback/groups/{gid}/hls/media.m3u8`. Sahada parça geçişleri yavaş kaldı → varsayılan eski yol. Ekrandan Stream/HLS anahtarı veya `?hls=1` |
+| `reid` | **açık** | `GET /analysis/result/groups/{gid}/video/{vid}/track/{tid}/reid/stream` (SSE) |
+| `map`, `candidateScore`, `eventSearch`, `eventStatus`, `snapshot` | kapalı | Karşılığı olan uç yok; kod duruyor |
 
-Konsoldan geçici olarak açmak için:
-
-```js
-localStorage.setItem('ff.bbox', '1'); location.reload();
-```
-
----
-
-## Backend'den beklenenler
-
-| İstek | Bugün | Kazanç |
-|---|---|---|
-| `class_name` alanı | yalnızca `class_id` | çeviri tablosu kalkar |
-| `/tracks?class_id=` | uç sınıfa göre süzmüyor | süzme sunucuya geçer, `limit` anlam kazanır |
-| Çoklu PAR süzgeci | tek etiket, `matched_attribute` null | süzme sunucuya geçer |
-| bbox ucu JSON | msgpack, grup kapsamlı | `FEATURES.bbox` açılır |
+Konsoldan geçici açma: `localStorage.setItem('ff.reid','1'); location.reload()`.
 
 ---
 
-## Oynatma
+## 6. Kişi kimliği (identity.js) — nasıl saklanıyor
 
-VMS kayıtları AVI + MPEG-4 Part 2 — tarayıcı ikisini de açamaz. Backend
-`playback_uri` verene kadar yerel proxy üretiyoruz:
+Backend "kişi" kavramı tutmuyor; iki ayrı şey var:
 
-```bash
-python tools/proxy_cache.py --list     # durum tablosu
-python tools/proxy_cache.py --all      # eksik/bayat olanları üret
-```
+- `/video/object-linkages` → yalnızca **çift**: `(g,v,t) ↔ (g,v,t)`
+- `/settings/custom/…` → yalnızca **renk** (serbest JSON)
 
-Proxy kaydının içinde kaynağın `guid_id` imzası duruyor; backend sıfırlanıp
-video id'leri yeniden kullanılırsa eski proxy otomatik bayat sayılıp yeniden
-üretiliyor. Remux sonrası çıktı gerçekten çözülüyor — AVI içindeki bazı H.264
-akışları (data partitioning, çift DTS) remux'la kurtarılamıyor, o durumda
-otomatik yeniden kodlamaya düşülüyor.
+Kişi = çiftlerin oluşturduğu grafiğin **bağlı bileşeni** (A-B ve B-C yazılmışsa {A,B,C} tek kişi). İsimler (`Person 1, 2…`) kanonik üyeye göre türetilir, saklanmaz. Renk üye başına yazılır ki bileşenler birleşince kaybolmasın. Collection ekranında sürükleyerek gruplar arası bağlama yapılır; Summary ekranı bu bilgiyi yalnızca okur.
 
 ---
 
-## Hata ayıklama
+## 7. backend.js — backend tuhaflıkları burada kapalı
 
-Sunucu `/live` trafiğini iki yere yazabiliyor ve ikisi aynı şey değil.
+- **Zaman birimi** — `timestamp` bir dönem saniye, bir dönem 1/30000 zaman tabanıydı; `tsToSec()` ikisini de tanır. `frame_index` zaman için kullanılmaz.
+- **Sınıf adı** — uç `class_name` vermiyor, yalnızca `class_id`; ad tablosu burada.
+- **Sınıf / PAR süzgeci** — uçta yok, süzme istemcide (`par.attributes` sözlüğü üstünde).
+- **Lifecycle** — liste ucu giriş/çıkış vermiyorsa ayrıntı ucundan sekizerli havuzla tamamlanır, önbelleğe alınır.
+- **Proxy tazeliği** — proxy kaydında kaynağın `guid_id` imzası var; backend sıfırlanıp id'ler yeniden kullanılırsa eski proxy reddedilir.
 
-**Terminal** — okunur kalsın diye süzülüyor: kırpım ve stream istekleri hiç
-yazılmıyor, gövdeler 800 karakterde kesiliyor. Aradığın cevabı daralt:
-
-```bash
-python server.py --live-only /analysis --live-body -1
-```
-
-**Dosya** — süzgeç yok, kırpma yok, her istek zaman damgalı:
-
-```bash
-python server.py --log-file live.log
-```
-
-Terminalde akıp giden bir şeyi geri saramıyorsun; dosyada `grep` atarsın:
-
-```bash
-grep -A30 'POST .*/analysis' live.log      # analiz isteğinin tam cevabı
-grep '✗' live.log                          # yalnızca hatalar
-```
-
-İkisi birlikte de kullanılabilir: terminal `--live-only` ile dar kalır, dosya
-yine her şeyi alır. Dosya `a` kipinde açılıyor, her çalıştırma başına ayırıcı
-bir başlık düşüyor.
+Kullanılan backend uçları (özet): `/status/health`, `/video`, `/video/groups`, `/video/collections`, `/video/{id}/stream`, `/video/object-linkages`, `/analysis`, `/analysis/result/{id}/…`, `/playback/groups/{gid}/bboxes|hls`, `/settings/custom/…`. Tam liste `docs/DVSummary-Backend.postman_collection.json`.
 
 ---
 
-## Depoya girmeyenler
+## 8. Oynatma
 
-Bu depo yalnızca çalışan arayüzü taşıyor. Aşağıdakiler yerel diskte duruyor
-ama `.gitignore` ile dışarıda:
+VMS kayıtları AVI + MPEG-4 Part 2 — tarayıcı açamaz. Üç yol:
+
+1. **Merge (varsayılan)** — yüklerken ffmpeg MP4 üretir, backend'de MP4 durur → `/video/{id}/stream` doğrudan oynar.
+2. **HLS** — backend'in grup çalma listesi (`hls` bayrağı / `?hls=1`).
+3. **Yerel proxy** — eski kayıtlar için `python tools/proxy_cache.py --list | --all` (`web/assets/proxy/`, depoda yok).
+
+---
+
+## 9. Hata ayıklama
+
+```bash
+python server.py --live-only /analysis --live-body -1   # terminali daralt, gövdeyi tam yaz
+python server.py --log-file live.log                    # süzgeçsiz, tam trafik dosyaya
+grep -A30 'POST .*/analysis' live.log                   # analiz isteğinin tam cevabı
+grep '✗' live.log                                       # yalnızca hatalar
+```
+
+Terminal süzülür (kırpım ve stream istekleri yazılmaz, gövde 800 karakter); dosya süzgeçsizdir. Tekrarlayan aynı cevaplar bastırılır, iki dakikada bir özet düşer.
+
+---
+
+## 10. Depoya girmeyenler
 
 | Yol | Neden |
 |---|---|
-| `docs/` | rehberler, notlar, Postman koleksiyonu, playback test sayfası |
+| `docs/` | rehberler, notlar, Postman koleksiyonu, `start.bat` |
 | `archive/mock/` | 2026-08'de kaldırılan mock katmanı — referans |
 | `web/assets/` | üretilen proxy MP4'ler ve küçük resimler (200 MB+) |
-| `*.avi`, `*.mp4`, `*.bat` | örnek videolar, kişiye özel başlatma betiği |
+| `*.avi`, `*.mp4`, `*.bat`, `live.log` | örnek videolar, kişiye özel başlatma betiği, log |
 
-`docs/ARAYUZ-REHBERI.md` dosya dosya, blok blok arayüz rehberi — arayüzü
-öğrenmenin başlangıç noktası o.
+Arayüzü öğrenmeye `docs/ARAYUZ-REHBERI.md` ile başla; akış senaryoları için `docs/AKIS-SENARYOSU.md`, test adımları için `docs/TEST-ADIMLARI.md`.

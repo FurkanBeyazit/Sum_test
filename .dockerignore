@@ -1,0 +1,35 @@
+# Imaja GIRMEYECEKLER.
+# Buradaki liste .gitignore ile bilerek benzer ama aynisi degil: git'te
+# olmayan bir sey (ornegin .git klasorunun kendisi) burada da olmamali.
+
+.git
+.gitignore
+.github
+
+# Uretilen medya: proxy MP4'ler ve kucuk resimler. Birlikte ~280 MB ve
+# yeniden uretilebilir:  python tools/proxy_cache.py --all
+# Konteynerde bunun yeri bir volume (bkz. docker-compose.yml).
+web/assets/
+
+# ffmpeg birlestirme calisma alani — gecici parcalar, ~400 MB.
+.merge/
+
+# Mock donemi arsivi ve dokumanlar: calisan arayuzun parcasi degiller.
+archive/
+docs/
+
+# Python ara ciktilari
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# Yerel loglar ve ornek videolar
+*.log
+*.avi
+*.mp4
+*.bat
+
+# Editor / arac dizinleri
+.claude/
+.vscode/
+.idea/

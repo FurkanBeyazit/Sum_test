@@ -1,0 +1,76 @@
+# ============================================================================
+# 지능형 영상 요약 플랫폼 — arayüz
+# ----------------------------------------------------------------------------
+#   docker compose up -d --build      başlat (ilk sefer imajı da kurar)
+#   docker compose logs -f            canlı log
+#   docker compose restart            yeniden başlat
+#   docker compose down               durdur
+#
+# Arayüz:  http://<sunucu-ip>:8080/
+#
+# AYARLAR .env'den geliyor — aynı klasörde bir `.env` dosyası, iki satır:
+#   DVSUMMARY_API=http://dvsummary-backend:8001
+#   UI_PORT=8080
+# Dosya yoksa aşağıdaki varsayılanlar kullanılıyor.
+# ============================================================================
+services:
+  ui:
+    build: .
+    image: vsum-ui:latest
+    container_name: vsum-ui
+    # Sunucu yeniden başlarsa arayüz de kendiliğinden kalksın. `always` değil:
+    # elle `down` dendiğinde kalkmaya çalışmasın.
+    restart: unless-stopped
+
+    ports:
+      # Sol taraf SUNUCUNUN portu, sağ taraf konteynerin içi (hep 8000).
+      # Varsayılan 8080, 8000 değil: backend makinesinde 8000'i başka bir
+      # servis dinliyor. Değiştirmek için .env'e `UI_PORT=9000` yazmak
+      # yeterli — bu dosyaya dokunmaya gerek yok.
+      - "${UI_PORT:-8080}:8000"
+
+    environment:
+      # Tarayıcı backend'e DOĞRUDAN gitmiyor; bütün /live/* trafiği bu
+      # konteynerden geçiyor (backend'de CORS başlığı yok). Yani bu adresin
+      # KONTEYNERDEN erişilebilir olması gerekiyor, tarayıcıdan değil.
+      DVSUMMARY_API: "${DVSUMMARY_API:-http://dvsummary-backend:8001}"
+
+    volumes:
+      # Birleştirme çalışma alanı. Volume olmasaydı yarıda kalan bir yükleme
+      # her yeniden başlatmada silinirdi.
+      - merge:/app/.merge
+      # Proxy önbelleği (tools/proxy_cache.py çıktısı). Boş başlıyor; arayüz
+      # index.json'u bulamayınca sessizce backend akışına düşüyor, yani
+      # doldurulmadan da çalışıyor.
+      - assets:/app/web/assets
+
+    # BACKEND'E KONTEYNER ADIYLA GİDİYORUZ, IP İLE DEĞİL.
+    #
+    # DVSummary yığını `dvsummary-network` adında sabit adlı bir bridge ağı
+    # kuruyor ve bütün servislerini oraya bağlıyor. Biz de o ağa
+    # katılıyoruz; böylece adres `dvsummary-backend:8001` oluyor — makinenin
+    # IP'si değişse de, backend portu host'a hiç yayınlanmasa da çalışıyor.
+    #
+    # Ağa bağlıyken backend ekibi `docker compose down` dediğinde ağ
+    # SİLİNMİYOR: Docker "network has active endpoints" deyip bırakıyor.
+    # Yani onların yeniden başlatması bizi düşürmüyor.
+    #
+    # Ağ yoksa bu konteyner açılmıyor — ve doğrusu da bu: sessizce ayrı bir
+    # ağda açılıp "backend'e ulaşamıyorum" demekten iyi.
+    networks:
+      - dvsummary-network
+
+    # ESKİ YOL — ağ kullanılamazsa. Yukarıdaki `networks:` bloğunu ve
+    # dosyanın en altındaki `networks:` tanımını kapatıp .env'e
+    #   DVSUMMARY_API=http://172.20.14.161:8001
+    # yazmak yeterli. Backend'in portu host'a yayınlandığı sürece çalışıyor.
+
+volumes:
+  merge:
+  assets:
+
+# `external: true` = "bu ağı ben kurmuyorum, DVSummary yığını kuruyor".
+# Bizim `up` komutumuz onu oluşturmaya çalışmıyor, var olanı buluyor.
+networks:
+  dvsummary-network:
+    external: true

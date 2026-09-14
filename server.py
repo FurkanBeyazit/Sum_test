@@ -1403,18 +1403,27 @@ def main():
     srv = ThreadingHTTPServer((ARGS.host, ARGS.port), Handler)
     srv.daemon_threads = True
     url = f"http://{ARGS.host}:{ARGS.port}/"
+    # Acilis afisi INGILIZCE: bu satirlari yalnizca biz okumuyoruz. Sunucuda
+    # `docker compose logs` diyen backend muhendisinin gordugu ilk sey bu ve
+    # Turkce bir afis orada bir sey anlatmiyor.
     print("\n" + "=" * 58)
-    print(f"  지능형 영상 요약 플랫폼")
+    print(f"  지능형 영상 요약 플랫폼 — UI server")
     print(f"  UI       : {url}")
-    print(f"  Backend  : {LIVE_BASE}   (tarayici /live/* uzerinden gider)")
-    print(f"  Birlestir: {url}api/merge")
+    # 0.0.0.0 bir adres degil, "butun arayuzleri dinle" demek. Docker'da bu
+    # her zaman boyle ve log'a bakan, o satiri acilacak adres saniyor —
+    # gercek kapi disaridan yayinlanan port (compose'daki UI_PORT).
+    if ARGS.host in ("0.0.0.0", "::"):
+        print("             (listening on every interface — open it at the "
+              "published port, not at 0.0.0.0)")
+    print(f"  Backend  : {LIVE_BASE}   (the browser reaches it via /live/*)")
+    print(f"  Merge    : {url}api/merge")
     if LOG:
-        print(f"  Log      : {ARGS.log_file}   (suzgecsiz, tam govde)")
-    print("=" * 58 + "\nCtrl+C ile durdurun.\n")
+        print(f"  Log      : {ARGS.log_file}   (unfiltered, full bodies)")
+    print("=" * 58 + "\nStop with Ctrl+C.\n")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
-        print("\nkapatiliyor")
+        print("\nshutting down")
     finally:
         if LOG:
             LOG.close()
