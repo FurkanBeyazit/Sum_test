@@ -78,6 +78,18 @@ const tintOf = (o) => CLASS_TINT[o.class_name] || CLASS_TINT.other;
 const ROWS_COLLAPSED = 1;
 const ROWS_OPEN = 5;
 
+/* PARÇA OYNATMA ÖLÇÜLERİ.
+   Bir track şeridi yarım saniye sürebiliyor; tam o aralığı oynatmak göze
+   tek kare gibi geliyor ve "tıkladım, bir şey olmadı" diye okunuyor. Taban
+   süre bunu engelliyor; ön yükleme de kişinin kadraja girişini gösteriyor,
+   yoksa görüntü adam zaten ortadayken açılıyor. */
+const CLIP_MIN = 1.6;   // sn — bir parçanın en az bu kadarı oynuyor
+const CLIP_PAD = 0.4;   // sn — parçanın başından önce bu kadar geriden
+/* Kaynak değiştikten sonra oynatıcının saati bir süre ESKİ medyaya ait
+   kalıyor ve o değerle "parça bitti" kararı vermek listeyi bir anda sonuna
+   kadar akıtıyordu. Bu pencere boyunca parça bitişine bakmıyoruz. */
+const CLIP_SETTLE = 600;  // ms
+
 /* Kişi paleti — objects.js'teki listenin AYNISI. İki ekranda aynı track
    aynı rengi göstermeli, yoksa "grupta kırmızıydı burada turuncu" olurdu. */
 const PALETTE = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#38bdf8',
@@ -152,6 +164,23 @@ export async function screenCollection(collectionId, query) {
   let active = clock.bands[0];   // oynatıcının bağlı olduğu band
   let activePart = null;         // aktif bandda o an oynayan video
   let selected = null;           // seçili olay/nesne
+  /* PARÇA OYNATMA. Doluysa oynatıcı serbest değil, bir listeyi takip
+     ediyor: her parça bittiğinde bir sonrakinin başına atlıyor, liste
+     bitince duruyor (bkz. playClips). İki yerden doluyor — bir şeride
+     tıklamak (tek parça) ve bir renge basmak (o kişinin bütün parçaları). */
+  let clip = null;   // { segs:[{b,t0,t1}], i, color, guard }
+  /* `seek()` kullanıcıdan mı geliyor yoksa parça oynatmanın kendisinden mi.
+     Kullanıcının her elle araması listeyi iptal ediyor; listenin kendi
+     atlayışı etmiyor. */
+  let clipSeek = false;
+  /* SÜRÜKLERKEN HEDEFİN ÖN İZLEME RENGİ.
+     Renkli bir şeridi renksiz bir şeridin üstüne sürüklerken ekranda o anın
+     görüntüsü oynuyor ve karar tam olarak oradaki kutuya bakarak veriliyor.
+     Ama hedef henüz kimseye bağlı olmadığı için kutusu nötr tonda çiziliyor
+     ve kalabalık bir karede hangisi olduğu seçilemiyordu. Bırakılırsa ne
+     olacağını önceden gösteriyoruz: kutu KAYNAĞIN rengine bürünüyor.
+     Kalıcı değil — kimliğe dokunmuyor, fare çıkınca sönüyor. */
+  let dragTint = null;   // { id, color }
   /* Süzgeç boş dönerse "kaç track tarandı" cümlesi için — Object
      ekranındaki `lastScanned` ile aynı iş. */
   let lastScanned = 0;
@@ -205,6 +234,16 @@ export async function screenCollection(collectionId, query) {
     fullscreenOf: () => vwell,
   });
 
+  /* RENK OYNATMA ŞERİDİ — ▶ ⟲ ⟳ üçlüsünün hemen yanında.
+     Koleksiyondaki her renk için bir düğme. Basınca yalnızca o rengin
+     şeritleri oynuyor, aradaki boşluklar atlanıyor: "bu adamı baştan sona
+     göster" isteğinin karşılığı bu. Yeri oynatma düğmelerinin yanında,
+     çünkü yaptığı iş oynatmak — panel başlığına ya da sağ bara koymak onu
+     bir süzgeç gibi gösterirdi. */
+  const reelBar = el('div.cl-reel');
+  reelBar.style.display = 'none';
+  ctl.insertBefore(reelBar, tcode);
+
   const tlCanvas = el('canvas.tlcanvas');
 
   /* ------------------------------------------------------- kip anahtarı --
@@ -233,16 +272,32 @@ export async function screenCollection(collectionId, query) {
   const reidBar = el('div.op-reidbar', {}, reidInfo, el('span.grow'), reidExit);
   reidBar.style.display = 'none';
 
+  /* HEPSİNİ AÇ / HEPSİNİ KAPAT.
+     Sağ üstte eskiden bir ipucu cümlesi duruyordu ("hover a group to
+     expand…"). İki sebeple gitti: ilki, üç kullanımdan sonra kimse okumuyor
+     ama yer kaplamaya devam ediyor; ikincisi, orası ekranın tıklanmaya en
+     müsait köşesi ve orada tıklanamayan bir metnin durması boşa duruyordu.
+     Yerine hover açılımının kalıcı hâli geldi: iki bandı yan yana
+     karşılaştırmak için ikisinin birden açık olması gerekiyor ve fare iki
+     bandın üstünde birden duramıyor. */
+  const expandBtn = el('button.btn.sm.ghost', {
+    title: 'Open every group at once, instead of only the one under the '
+      + 'cursor. The panel keeps its height — a long list scrolls inside it, '
+      + 'so the video never changes size.\n'
+      + 'Wheel zooms the time axis · Ctrl + wheel scrolls the list.',
+    onclick: () => setExpandAll(!TL.expandAll),
+  }, '⌄ Expand all');
+
+  const tlBody = el('div.panel-b', { style: { padding: '6px' } }, tlCanvas);
   const tlPanel = el('div.panel.cl-tl.op-tlpanel', {},
     el('div.panel-h', {}, 'Object tracking segment',
       /* Bayrak kapalıysa anahtar hiç çizilmiyor: ekran bugünkü native
          davranışında kalır, kod silinmez. */
       FEATURES.reid ? modeBox : null,
       el('span.grow'),
-      el('span', { class: 'tiny muted' },
-        'hover a group to expand · drag between segments to link a person')),
+      expandBtn),
     reidBar,
-    el('div.panel-b', { style: { padding: '6px' } }, tlCanvas));
+    tlBody);
 
   const modeSw = el('div.cl-modes', {},
     ...[['events', 'Events'], ['objects', 'Objects']].map(([k, label]) =>
@@ -526,6 +581,10 @@ export async function screenCollection(collectionId, query) {
    * playhead'i kaydırmak onların okunmasını bozardı.
    */
   function seek(t) {
+    /* Elle arama parça listesini bitiriyor. Listenin kendi atlayışları da
+       buradan geçtiği için ayrım `clipSeek` ile yapılıyor — yoksa liste ilk
+       atlayışında kendini iptal ederdi. */
+    if (clip && !clipSeek) stopClip();
     axisT = Math.max(0, Math.min(AXIS, t || 0));
     place(axisT);
     paint();
@@ -537,12 +596,151 @@ export async function screenCollection(collectionId, query) {
    * çünkü gösterilecek görüntü yok ve ekran boşalırdı.
    */
   function handover(bandId) {
+    /* Parça listesi oynarken devir YOK. Liste zaten hangi kameranın
+       oynayacağını parça parça söylüyor; farenin başka bir bandın üstünde
+       durması onu ortasından kesip başka bir görüntüye atlatırdı. */
+    if (clip) return;
     const b = bandOf(bandId);
     if (!b || b === active) return;
     if (!b.covers(axisT)) return;
     active = b;
     place(axisT);
     paint();
+  }
+
+  /* ====================================================== parça oynatma ====
+     Oynatıcıyı bir ARALIK LİSTESİNE bağlar: her aralığın başına gidiyor,
+     sonuna gelince bir sonrakine atlıyor, liste bitince duruyor. Aradaki
+     boşluklar — o kişinin görünmediği dakikalar — hiç oynatılmıyor.
+
+     İki çağıran var ve ikisi de aynı motoru kullanıyor:
+       · bir şeride tıklamak → tek elemanlı liste ("yalnızca bu bbox")
+       · bir renge basmak    → o rengin bütün şeritleri, zaman sırasında
+
+     Aralıklar KOLEKSİYON EKSENİNDE ve kendi bandlarını taşıyor: liste
+     kameradan kameraya geçebiliyor, çünkü bir kişi zaten kameralar arasında
+     dolaşıyor. */
+
+  /** Listeyi kurar ve ilk parçadan başlatır. */
+  function playClips(segs, color) {
+    if (!segs || !segs.length) return;
+    clip = { segs, i: -1, color: color || null, guard: 0 };
+    stepClip();
+    renderReel();
+  }
+
+  /** Sıradaki parçaya geç; liste bittiyse dur. */
+  function stepClip() {
+    if (!clip) return;
+    clip.i += 1;
+    if (clip.i >= clip.segs.length) {
+      /* Bitişte DURUYOR, başa dönmüyor: liste bir soruya verilen cevap
+         ("bu kişi nerede görünmüş"), cevap bitince ekran da bitiyor. */
+      stopClip();
+      videoEl.pause();
+      return;
+    }
+    const s = clip.segs[clip.i];
+    active = s.b;
+    /* Kaynak değişimi kısa bir süre eski saati göstermeye devam ediyor;
+       bu pencerede bitiş kontrolü yapılmıyor (bkz. CLIP_SETTLE). */
+    clip.guard = performance.now() + CLIP_SETTLE;
+    clipSeek = true;
+    seek(Math.max(0, s.t0 - CLIP_PAD));
+    clipSeek = false;
+    videoEl.play().catch(() => {});
+  }
+
+  /** Listeyi bırak — oynatıcı serbest kalıyor, olduğu yerde devam ediyor. */
+  function stopClip() {
+    if (!clip) return;
+    clip = null;
+    renderReel();
+  }
+  onLeave(stopClip);
+
+  /** Her `timeupdate`da: bu parça bitti mi? */
+  function clipTick() {
+    if (!clip) return;
+    const s = clip.segs[clip.i];
+    if (!s || active !== s.b) return;
+    if (performance.now() < clip.guard) return;
+    if (axisT >= s.t1) stepClip();
+  }
+
+  /**
+   * Bir rengin bütün şeritleri, tek liste.
+   *
+   * Renk kişinin kendisi demek (bkz. dosya başındaki BAND_TINT açıklaması):
+   * bir kişiye renk verildiğinde o renk kimlik üzerinden bütün kameralardaki
+   * eşlerine de gidiyor. Dolayısıyla "kırmızıyı oynat" = "bu adamı bütün
+   * kameralarda, baştan sona göster".
+   *
+   * Aynı bandda üst üste binen ya da burun buruna gelen şeritler
+   * birleştiriliyor: model bir yürüyüşü saniyeler içinde birkaç track'e
+   * bölebiliyor ve her birini ayrı parça saymak aynı üç saniyeyi beş kez
+   * oynatmak olurdu.
+   */
+  function playColor(color) {
+    const segs = [];
+    for (const b of clock.bands) {
+      const d = data.get(b.id);
+      if (!d) continue;
+      for (const o of d.objects) {
+        if (o._color !== color) continue;
+        segs.push({ b, t0: o._t0, t1: Math.max(o._t1, o._t0 + CLIP_MIN) });
+      }
+    }
+    segs.sort((x, y) => x.t0 - y.t0);
+    const merged = [];
+    for (const s of segs) {
+      const last = merged[merged.length - 1];
+      if (last && last.b === s.b && s.t0 <= last.t1 + CLIP_PAD) {
+        last.t1 = Math.max(last.t1, s.t1);
+      } else merged.push({ b: s.b, t0: s.t0, t1: s.t1 });
+    }
+    if (!merged.length) return;
+    playClips(merged, color);
+  }
+
+  /**
+   * Renk şeridini kurar — koleksiyonda KULLANILMIŞ renkler, kullanıldıkları
+   * sırayla. Palet değil: boyanmamış bir renk için düğme çıkarmak, basınca
+   * hiçbir şey oynatmayan bir düğme demek olurdu.
+   */
+  function renderReel() {
+    const seen = new Map();   // renk → { n, person, secs }
+    for (const b of clock.bands) {
+      const d = data.get(b.id);
+      if (!d) continue;
+      for (const o of d.objects) {
+        if (!o._color) continue;
+        const e = seen.get(o._color) || { n: 0, person: null, secs: 0 };
+        e.n += 1;
+        e.secs += Math.max(o._t1 - o._t0, CLIP_MIN);
+        if (!e.person && o._person) e.person = o._person;
+        seen.set(o._color, e);
+      }
+    }
+    clear(reelBar);
+    reelBar.style.display = seen.size ? '' : 'none';
+    if (!seen.size) return;
+    for (const [color, info] of seen) {
+      const on = !!clip && clip.color === color;
+      reelBar.append(el('button.cl-reelbtn', {
+        class: on ? 'on' : '',
+        style: { background: color },
+        title: `${info.person || 'Coloured tracks'} — `
+          + `${info.n} segment(s), about ${dur(info.secs)} of video.\n`
+          + (on ? 'Playing. Click to stop.'
+            : 'Plays only these segments, back to back, skipping everything '
+              + 'in between.'),
+        onclick: () => {
+          if (on) { stopClip(); videoEl.pause(); return; }
+          playColor(color);
+        },
+      }, on ? '❚❚' : '▶'));
+    }
   }
 
   /* ------------------------------------------------------------- çizim -- */
@@ -624,6 +822,31 @@ export async function screenCollection(collectionId, query) {
       .sort((x, y) => x._t0 - y._t0);
   }
 
+  /* ZAMAN ÇİZGİSİNİN YERİ BAŞTAN AYRILIYOR.
+     Panel içeriğine göre büyüyordu: bir bandın üstüne gelmek tuvali
+     uzatıyor, panel de onunla birlikte uzayıp yukarıdaki videoyu
+     küçültüyordu; fare çıkınca video geri büyüyordu. Bakılan görüntünün
+     boyu farenin nerede durduğuna bağlı kalmış oluyordu.
+
+     Şimdi panelin gövdesi EN KÖTÜ DURUMA göre sabitleniyor — bir band
+     açıkken gereken yükseklik (bkz. timeline.js reservedHeight). Açılım
+     artık paneli değil yalnızca tuvali büyütüyor, ayrılan yerden uzun
+     kalırsa da panel kendi içinde kayıyor. Video hiç kıpırdamıyor. */
+  function fitReserve() {
+    if (!TL) return;
+    /* +12: gövdenin kendi iç boşluğu (padding 6px, border-box). */
+    tlBody.style.height = (TL.reservedHeight() + 12) + 'px';
+  }
+
+  /** Başlıktaki aç/kapa düğmesi. */
+  function setExpandAll(on) {
+    TL.setExpandAll(on);
+    expandBtn.textContent = TL.expandAll ? '⌃ Collapse all' : '⌄ Expand all';
+    expandBtn.classList.toggle('pri', TL.expandAll);
+    expandBtn.classList.toggle('ghost', !TL.expandAll);
+    syncAll();
+  }
+
   function syncAll() {
     /* Kişi etiketi ve rengi her çizimden önce kimlik kümesinden tazeleniyor:
        bağlantı değişince bütün bandlardaki aynı kişi birlikte değişmeli. */
@@ -646,13 +869,15 @@ export async function screenCollection(collectionId, query) {
         sub: b.anchored ? '' : '⚠ no start time',
         color: b.color,
         spans: b.spans,
-        lanes: lanesOf(b, TL && TL.openBand === b.id
+        lanes: lanesOf(b, TL && (TL.expandAll || TL.openBand === b.id)
           ? ROWS_OPEN : ROWS_COLLAPSED),
       })),
       total: AXIS,
       startIso: clock.startIso,
     });
     TL.draw();
+    fitReserve();
+    renderReel();
     renderList();
     /* Seçili şeridin kişisi/rengi değişmiş olabilir — panel her çizimde
        tazeleniyor, yoksa bağladıktan sonra hâlâ "bağlı değil" yazardı. */
@@ -679,8 +904,12 @@ export async function screenCollection(collectionId, query) {
       ? d.objects.filter((o) => String(o.video_id) === String(activePart.id))
       : [];
     overlay.setTrackMeta(here);
+    /* Sürükleme ön izlemesi gerçek rengin YERİNE değil, YOKLUĞUNDA geçiyor:
+       hedefin kendi rengi varsa o kalıyor (bkz. dragTint). */
+    const tintOfObj = (o) => o._color
+      || (dragTint && dragTint.id === o.id ? dragTint.color : null);
     overlay.colorOf = new Map(here
-      .map((o) => [o.track_id, o._color])
+      .map((o) => [o.track_id, tintOfObj(o)])
       .filter(([, c]) => !!c));
   }
 
@@ -1093,7 +1322,10 @@ export async function screenCollection(collectionId, query) {
       cmpStrip.append(cmpFace(from, from._color),
         el('span.op-cmparrow', {}, '→'));
     }
-    cmpStrip.append(cmpFace(to, to._color));
+    /* Kırpımın çerçevesi de ön izleme rengini alıyor: video üstündeki kutu
+       ile yan yana duran fotoğraf aynı şeyi söylemeli. */
+    cmpStrip.append(cmpFace(to, to._color
+      || (dragTint && dragTint.id === to.id ? dragTint.color : null)));
     if (from && from.id !== to.id) {
       cmpStrip.append(el('span.op-cmphint', {}, 'aynı kişiyse bırak'));
     }
@@ -1221,6 +1453,9 @@ export async function screenCollection(collectionId, query) {
    * duraklatıyor, çünkü orada duran şey artık bir oynat/duraklat düğmesi.
    */
   function bandPlay(id) {
+    /* "Şimdi bu kamerayı izliyorum" demek, bir listeyi takip etmeyi
+       bırakmak demek. */
+    stopClip();
     const b = bandOf(id);
     if (!b) return;
     if (active === b && !videoEl.paused) { videoEl.pause(); return; }
@@ -1288,10 +1523,20 @@ export async function screenCollection(collectionId, query) {
     }
     selected = it;
     if (b) active = b;
-    seek(it._t0);
     syncAll();
     showInfo(it);
-    videoEl.play().catch(() => {});
+    /* YALNIZCA O ŞERİT OYNUYOR, SONRA DURUYOR.
+       Eskiden şeridin başına gidip oynatmaya devam ediyordu: kullanıcı tek
+       bir kutuya bakmak için tıklıyor, iki dakika sonra hâlâ oynayan ve
+       artık başka bir şey gösteren bir video buluyordu. Bir şeride tıklamak
+       "şunu göster" demek, "buradan itibaren izle" değil — o ikincisi zaten
+       band başlığındaki oynat düğmesinin işi. */
+    if (b && mode === 'objects') {
+      playClips([{ b, t0: it._t0, t1: Math.max(it._t1, it._t0 + CLIP_MIN) }]);
+    } else {
+      seek(it._t0);
+      videoEl.play().catch(() => {});
+    }
   }
 
   function findItem(id) {
@@ -1332,13 +1577,26 @@ export async function screenCollection(collectionId, query) {
      grubuna devrediyor — "bu ikisi aynı kişi mi" sorusunun cevabı ancak iki
      görüntüyü de görünce veriliyor. */
   function onHoverEvent(ev, fromEv) {
-    if (!ev) return showCompare(null, null);
-    const it = findItem(ev.id);
-    if (!it) return showCompare(null, null);
-    showCompare(fromEv ? findItem(fromEv.id) : null, it);
+    const it = ev ? findItem(ev.id) : null;
+    if (!it) {
+      dragTint = null;
+      syncOverlay();
+      return showCompare(null, null);
+    }
+    const from = fromEv ? findItem(fromEv.id) : null;
+    /* Yalnızca RENKSİZ hedef boyanıyor. Hedefin kendi rengi varsa onu
+       kaynağın rengine çevirmek yalan olurdu: o şerit başka birine ait ve
+       bırakmak iki kişiyi birleştirmek demek — bunu renk saklamamalı. */
+    dragTint = from && from._color && !it._color
+      ? { id: it.id, color: from._color }
+      : null;
+    showCompare(from, it);
     const b = bandOf(it.group_id);
     if (b) active = b;
     seek(it._t0);
+    /* Parça değişmediyse `place` beslemeye dokunmuyor; renk tablosu yine de
+       tazelenmeli. */
+    syncOverlay();
     videoEl.play().catch(() => {});
   }
 
@@ -1602,6 +1860,9 @@ export async function screenCollection(collectionId, query) {
   /* --------------------------------------------------------- bağlantılar */
   TL = new Timeline(tlCanvas, {
     mode: 'single',
+    /* Ayrılacak yerin hesabı bu sayıyı biliyor olmalı: açık bandın en fazla
+       kaç şeridi olabileceğini `lanesOf` ile biz belirliyoruz. */
+    openRows: ROWS_OPEN,
     onSeek: (t) => { seek(t); },
     onPickEvent: (e) => onPick(e),
     onLinkEvent: (a, b) => onLink(a, b),
@@ -1664,6 +1925,9 @@ export async function screenCollection(collectionId, query) {
       /* Kutu penceresi PARÇA saniyesiyle sürülüyor (bkz. bboxfeed.js). */
       if (feed) feed.at(videoEl.currentTime);
     }
+    /* Parça listesi varsa bitişi burada yakalanıyor: eksen saniyesi ancak
+       bu noktada tazelenmiş oluyor. */
+    clipTick();
     paint();
   });
   videoEl.addEventListener('play', () => { btnPlay.textContent = '❚❚'; paint(); });

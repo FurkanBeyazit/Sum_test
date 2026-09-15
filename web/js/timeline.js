@@ -80,6 +80,16 @@ export class Timeline {
     /* Hangi band açık. Tek seferde bir tane: ikisi birden açıkken ekran
        yine dolup taşıyor ve "geçici açılım" olmaktan çıkıyor. */
     this._openBand = null;
+    /* HEPSİNİ AÇ — hover açılımının kalıcı hâli.
+       Hover açılımı "bakınırken" doğru ama bir şeyi karşılaştırmak için iki
+       bandın AYNI ANDA açık olması gerekiyor ve fare ikisinin üstünde birden
+       duramıyor. Bu bayrak açıkken bütün bandlar açık duruyor ve hover
+       açılımı devre dışı kalıyor: zaten açık olanı açmanın anlamı yok. */
+    this.expandAll = false;
+    /* Açık bir bandın en fazla kaç şeridi olabilir — yalnızca
+       `reservedHeight()` için. Çağıran ekran zaten bu sayıyı `setData`'ya
+       verdiği şerit listesiyle uyguluyor (bkz. collection.js ROWS_OPEN). */
+    this.openRows = opts.openRows || 1;
     /* Yerleşim tablosu — `_layout()` üretiyor. Çizim ve isabet testi
        ikisi de buradan okuyor, yani ikisi ASLA ayrışamıyor. Eskiden y
        hesabı iki ayrı yerde tekrarlanıyordu. */
@@ -203,7 +213,7 @@ export class Timeline {
       for (const b of this.bands) {
         this._rows.push({ kind: 'band', band: b, y, h: BAND_H });
         y += BAND_H;
-        if (this._openBand === b.id) {
+        if (this.expandAll || this._openBand === b.id) {
           const list = (b.lanes && b.lanes.length) ? b.lanes
             : [{ id: `${b.id}:empty`, label: '', events: [] }];
           for (const lane of list) {
@@ -253,6 +263,40 @@ export class Timeline {
     if (this._openBand === id) return;
     this._openBand = id;
     this.resize();      // yükseklik değişti — resize kendi draw'ını yapıyor
+  }
+
+  /**
+   * Hepsini aç / hepsini kapat.
+   * Açarken hover açılımı da sıfırlanıyor: iki ayrı açılım kuralının aynı
+   * anda işlemesi, kapatınca hangi bandın açık kalacağını belirsiz yapardı.
+   */
+  setExpandAll(on) {
+    const v = !!on;
+    if (this.expandAll === v) return;
+    this.expandAll = v;
+    this._openBand = null;
+    this.resize();
+  }
+
+  /**
+   * EN KÖTÜ DURUMDA gereken yükseklik — bir band açıkken.
+   *
+   * Çağıran ekran paneli bu boya SABİTLİYOR (bkz. collection.js fitReserve).
+   * Sebep: panel içeriğine göre büyüyünce bir bandın üstüne gelmek videoyu
+   * küçültüyor, fare çıkınca büyütüyordu; ekran nefes alıp veriyordu ve
+   * bakılan görüntünün boyu farenin nerede durduğuna bağlıydı. Yer baştan
+   * ayrılınca açılım paneli değil yalnızca tuvali büyütüyor.
+   *
+   * "Hepsini aç" bu hesaba GİRMİYOR: o kalıcı ve niyetli bir seçim, tuval
+   * ayrılan yerden uzun kalırsa panel kendi içinde kayıyor.
+   */
+  reservedHeight() {
+    if (!this.bands || !this.bands.length) return this.height();
+    const n = this.bands.length;
+    const open = Math.max(1, this.openRows);
+    /* Her band: başlık + (kapalıyken) tek özet satır. Açık olan band bunun
+       üstüne (open - 1) satır daha koyuyor. */
+    return this.hh + n * (BAND_H + ROW_H) + (open - 1) * ROW_H + 10;
   }
 
   fit() {
@@ -457,7 +501,8 @@ export class Timeline {
       if (this.bands) {
         /* Açık bandın şeritleri girintili: hangi banda ait oldukları
            soldaki boşluktan okunuyor, her satıra grup adı yazmaya gerek yok. */
-        c.strokeStyle = row.band && this._openBand === row.band.id
+        c.strokeStyle = row.band
+          && (this.expandAll || this._openBand === row.band.id)
           ? (row.band.color || '#334155') : '#18222f';
         c.lineWidth = 2;
         c.beginPath();
@@ -590,7 +635,7 @@ export class Timeline {
    */
   _drawBandHead(c, row, W) {
     const b = row.band, y = row.y;
-    const open = this._openBand === b.id;
+    const open = this.expandAll || this._openBand === b.id;
     const col = b.color || '#64748b';
     const playing = this.playingBand === b.id;
 
@@ -984,7 +1029,7 @@ export class Timeline {
        onun altında açılıyor.
        Tek istisna kaydırma (pan): orada eksen zaten hareket ediyor, bir de
        satırlar zıplarsa hiçbir şey takip edilemiyor. */
-    if (this.bands && !this._drag) {
+    if (this.bands && !this._drag && !this.expandAll) {
       const row = this._rowAt(y);
       const id = row && row.band ? row.band.id : null;
       if (id !== this._openBand) {
@@ -1026,6 +1071,25 @@ export class Timeline {
   }
   _wheel(e) {
     e.preventDefault();
+    /* CTRL + TEKERLEK = DİKEY KAYDIRMA.
+       Tuvalin tamamı tek bir <canvas>; tarayıcının kendi kaydırması onun
+       İÇİNDE işlemiyor, yalnızca dışarıdaki kutuda. Düz tekerlek de zaten
+       zamana yaklaşmak için ayrılmış. "Hepsini aç" ile liste ayrılan yerden
+       uzun olduğunda alt bandlara inmenin bir yolu kalmıyordu.
+
+       Tarayıcının Ctrl+tekerlek varsayılanı SAYFA YAKINLAŞTIRMA olduğu için
+       kaydırmayı elle yapıyoruz — `preventDefault` yukarıda zaten çağrıldı.
+       `deltaMode` normalleştiriliyor: bazı fareler piksel değil satır
+       bildiriyor ve o zaman 3 birimlik bir tekerlek hareketi 3 piksel
+       kaydırırdı. */
+    if (e.ctrlKey || e.metaKey) {
+      const box = this.cv.parentElement;
+      if (!box) return;
+      const step = e.deltaMode === 1 ? 16
+        : (e.deltaMode === 2 ? box.clientHeight : 1);
+      box.scrollTop += e.deltaY * step;
+      return;
+    }
     const [x] = this._pt(e);
     const t = this.T(x);
     const f = e.deltaY > 0 ? 1.22 : 1 / 1.22;

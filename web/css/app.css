@@ -1449,10 +1449,19 @@ table.mg .warnq { color: #fbbf24; }
    videoyu yiyordu. Çözüm ilişkiyi tersine çevirmek — üst sıranın boyu
    KARDEŞİNDEN DEĞİL pencereden geliyor (vh), zaman çizgisi de artandan
    ibaret. Artık band açmak videoya matematiksel olarak dokunamıyor. */
+/* ÜST SIRA ARTAN ALANIN TAMAMINI ALIYOR.
+   Bir ara sabit yükseklik verilmişti; sebebi "zaman çizgisi büyüyünce video
+   kırpılıyor" idi. Ama kırpılmanın sebebi yerleşim değil, `object-fit`
+   kuralının geçersiz kalmasıydı (bkz. aşağıdaki `.cl-player .vstack`).
+   Kırpılma imkânsız hâle gelince video KÜÇÜLEBİLİR — küçülmek zararsız,
+   kesilmek zararlıydı. Sabit yükseklik kalkınca da bandlar kapalıyken
+   altta kalan koca boşluk videoya gidiyor. */
 .cl-top {
   display: flex; gap: var(--gap);
-  flex: 0 0 auto;
-  height: clamp(240px, 46vh, 560px);
+  flex: 1 1 auto;
+  /* Zaman çizgisi ne kadar açılırsa açılsın oynatıcı bunun altına inmiyor;
+     inmesi gerekiyorsa aşağıdaki `max-height` zaten çizgiyi durduruyor. */
+  min-height: 260px;
 }
 /* GENİŞLİĞİ OYNATICI ALIYOR, INFO DEĞİL.
    İkisini yarı yarıya bölmek denendi ve orantısız durdu: ekranın asıl işi
@@ -1465,6 +1474,34 @@ table.mg .warnq { color: #fbbf24; }
 }
 .cl-player .vwell { flex: 1 1 auto; min-height: 0; }
 
+/* GÖRÜNTÜNÜN TAMAMI HER ZAMAN EKRANDA — pazarlık yok.
+   ---------------------------------------------------
+   `.vstack.fill` kuralı zaten `object-fit: contain` diyor ama sahada
+   görüntünün altı kesiliyordu: `.vstack` yüksekliği bir şekilde içeriğe
+   bağlı kalınca video doğal boyutunda (1080p'de 800+ piksel) render edilip
+   kuyudan taşıyor, `.vwell` de `overflow: hidden` olduğu için ALTTAN
+   kırpıyor. Kırpılan yer kadrajın alt üçte biri — CCTV'de tam da insanların
+   yürüdüğü yer.
+
+   Bu yüzden burada `.fill` sınıfına GÜVENMİYORUZ: kuyunun içindeki yığın ve
+   video, sınıf olsun olmasın, kuyunun ölçüsüne kilitleniyor. Kural ekrana
+   özel (`.cl-player` altında), yani öteki ekranların davranışını
+   değiştirmiyor.
+
+   Sonuç: dar bir kuyuda video üstten/alttan değil, SOLDAN/SAĞDAN boşluk
+   bırakıyor. Kutu katmanı zaten contain letterbox'ını hesaplıyor
+   (overlay.js `geom()`), hizalama bozulmuyor. */
+.cl-player .vstack {
+  width: 100%; height: 100%;
+  max-width: 100%; max-height: 100%;
+  min-width: 0; min-height: 0;
+}
+.cl-player .vstack video {
+  width: 100%; height: 100%;
+  max-width: none; max-height: none;
+  object-fit: contain;
+}
+
 /* `.op-infopanel` Object ekranında ALT şerit olduğu için 240px'te
    kapanıyor ve büyümüyor. Burada sütun: tavanı kalkıyor, sıranın boyunu
    dolduruyor, dar kalan tek boyut genişlik. */
@@ -1475,16 +1512,46 @@ table.mg .warnq { color: #fbbf24; }
   min-width: 0; max-height: none;
 }
 
-/* ALT SIRA: zaman çizgisi — ARTAN ALANIN TAMAMI, NE FAZLASI NE AZI.
-   `flex-basis: 0` kritik: `auto` olsaydı başlangıç boyu tuvalin kendi
-   yüksekliği olurdu ve panel yine içeriğiyle büyümek isterdi. Sıfır taban +
-   `min-height: 0` ile panelin boyu yalnızca kalan yerden geliyor; tuval ne
-   kadar uzarsa uzasın panel KENDİ İÇİNDE kayıyor.
+/* ALT SIRA: zaman çizgisi — YERİ BAŞTAN AYRILMIŞ, SABİT.
+   -------------------------------------------------------
+   Önce `0 1 auto` idi: panel kendi içeriği kadar boy alıyordu. Kısa içerikte
+   doğru çalışıyordu ama bir bandın üstüne gelmek tuvali uzatınca panel de
+   uzuyor, yukarıdaki videoyu küçültüyordu; fare çıkınca video geri
+   büyüyordu. Bakılan görüntünün boyu farenin nerede durduğuna bağlıydı.
 
-   Eskiden `overflow: hidden` idi, yani açılan bandların alt kısmı hem
-   kırpılıyor hem de erişilemez oluyordu. */
-.cl-tl { flex: 1 1 0; min-height: 0; }
-.cl-tl .panel-b { overflow: auto; }
+   Şimdi gövdenin yüksekliğini JS veriyor ve EN KÖTÜ DURUMA göre veriyor:
+   bir band açıkken gereken boy (bkz. timeline.js `reservedHeight`,
+   collection.js `fitReserve`). Panel o boyda kalıyor, açılım yalnızca
+   tuvali büyütüyor, ayrılan yerden uzun kalırsa gövde kendi içinde kayıyor.
+   Böylece hover da "hepsini aç" da videoya dokunamıyor. */
+.cl-tl { flex: 0 0 auto; min-height: 0; }
+.cl-tl .panel-b {
+  /* `flex: 1` (panel varsayılanı) esnek taban demek ve JS'in verdiği boyu
+     geçersiz kılardı. */
+  flex: 0 0 auto;
+  overflow: auto;
+  /* Emniyet tavanı: çok bandlı bir koleksiyonda ayrılan yer ekranı yemesin.
+     Normalde devreye girmiyor — JS'in verdiği boy bunun altında kalıyor. */
+  max-height: 42vh;
+}
+
+/* RENK OYNATMA DÜĞMELERİ — oynatma düğmelerinin yanında.
+   Her düğme bir kişi: basınca yalnızca o rengin şeritleri uç uca oynuyor.
+   Renk düğmenin KENDİ zemini; ayrıca bir nokta koymak aynı bilgiyi iki kez
+   söylemek olurdu. Oynarken içindeki işaret ▶'den ❚❚'ye dönüyor, yani düğme
+   aynı zamanda "şu an bu oynuyor" göstergesi. */
+.cl-reel { display: flex; align-items: center; gap: 4px; margin-left: 2px; }
+.cl-reelbtn {
+  width: 22px; height: 22px; padding: 0;
+  border: 1px solid rgba(0, 0, 0, .35); border-radius: 6px;
+  color: rgba(4, 12, 20, .85);
+  font: 700 9px var(--sans); line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; opacity: .78;
+  transition: opacity var(--t), transform var(--t);
+}
+.cl-reelbtn:hover { opacity: 1; transform: translateY(-1px); }
+.cl-reelbtn.on { opacity: 1; box-shadow: 0 0 0 2px rgba(232, 238, 246, .55); }
 
 /* Hangi kameraya bakildigi videonun ustunde yaziyor. Oynatici hover ile
    grup degistirdigi icin bu etiket ekranin en cok degisen bilgisi —
