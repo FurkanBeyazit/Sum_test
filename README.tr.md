@@ -1,6 +1,6 @@
 # 지능형 영상 요약 플랫폼 — Arayüz
 
-> Son güncelleme: 2026-09-14 · Kod: commit 2026-09-14 (`fix(reid): split dropped counter…`)
+> Son güncelleme: 2026-09-15
 > Korece sürüm: [README.ko.md](README.ko.md) · Ayrıntılı rehberler: `docs/` (depoda değil, yerel diskte)
 
 CCTV kayıtlarını yükleyen, analiz kuyruğuna alan, sonuçları zaman çizgisinde gösteren ve birden çok kamerayı tek eksende karşılaştıran web arayüzü. Veri kaynağı tek: **DVSummary backend**'i (`172.20.14.161:8001`).
@@ -40,7 +40,6 @@ tarayıcı ──fetch('/live/…')──► server.py ──HTTP──► DVSum
 
 Mock veri katmanı 2026-08-27'de kaldırıldı; tam hâli `archive/mock/` altında.
 
----
 
 ## 2. Ekranlar (rotalar)
 
@@ -57,6 +56,13 @@ Mock veri katmanı 2026-08-27'de kaldırıldı; tam hâli `archive/mock/` altın
 | `#/login` | `screens/login.js` | Giriş formu (backend doğrulama istemiyor) |
 
 Ekranlar birbirini **asla** import etmez; yeni ekran = `screens/` altına dosya + `app.js`'te bir `case`.
+
+### Collection ekranı — son eklenenler (2026-09)
+
+- **Oynatıcı yüksekliği sabit** — zaman çizgisi ne kadar uzarsa uzasın videoyu sıkıştıramaz; uzun liste panelin içinde kayar.
+- **Renk oynatma şeridi** — ▶ ⟲ ⟳ düğmelerinin yanında, koleksiyonda *kullanılmış* her renk için bir düğme. Basınca o rengin (= o kişinin) bütün kameralardaki şeritleri baştan sona sırayla oynar, aradaki boşluklar atlanır; aynı bandda üst üste binen/bitişik şeritler tek parça sayılır. Liste bitince durur. Kullanıcının elle araması (seek) listeyi iptal eder. Bir şeride tıklamak tek parça oynatır.
+- **Hepsini aç / kapat** düğmesi — hover ile tek band açmanın kalıcı hâli; iki bandı yan yana karşılaştırmak için. Tekerlek zaman eksenini yakınlaştırır, Ctrl+tekerlek listeyi kaydırır.
+- **Sürükleme ön izlemesi** — renkli bir şeridi renksiz bir şeridin üstüne sürüklerken hedef kutu ve kırpım çerçevesi kaynağın rengini alır (bağlanınca ne olacağını gösterir).
 
 ---
 
